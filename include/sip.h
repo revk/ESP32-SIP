@@ -25,7 +25,7 @@ extern const uint8_t sip_pcm13_to_rtp[];
 typedef void sip_rtp_rx_t(uint8_t len,const uint8_t *rtp);
 
 // Register as client, returns 0 on error, else number of seconds until near expiry (i.e. when should register again)
-extern uint32_t sip_register(const char *server, const char *username,const char *password,sip_rtp_tx_t *rx);
+extern uint32_t sip_register(const char *server, const char *username,const char *password,sip_rtp_rx_t *rx);
 
 // Make a call, response is 200 if worked, else the call error code
-extern uint32_t sip_register(const char *server, const char *uri, const char *username,const char *password,sip_rtp_tx_t *rx);
+extern uint32_t sip_call(const char *server, const char *uri, const char *username,const char *password,sip_rtp_rx_t *rx);

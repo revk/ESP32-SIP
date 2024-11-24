@@ -1,5 +1,7 @@
 // ALAW coding
 
+#include <stdint.h>
+
 const int16_t sip_rtp_to_pcm13[]={ // RTP coding to PCM (13 bit)
    672,   640,   736,   704,   544,   512,   608,   576,
    928,   896,   992,   960,   800,   768,   864,   832,
