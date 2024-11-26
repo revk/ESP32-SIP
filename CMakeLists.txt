@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.5...3.25)
 
 set(SOURCES "sip.c" "sipsin.c" "alaw.c" "siptools.c")
-set(RECS esp_timer)
+set(RECS esp_timer esp_wifi)
 
 # Add extra dependencies
 

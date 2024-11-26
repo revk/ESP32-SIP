@@ -9,6 +9,7 @@ static const char __attribute__((unused)) * TAG = "SIP";
 #include <netdb.h>
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_netif.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "sip.h"
@@ -114,19 +115,65 @@ gethost (const char *name, uint16_t port, struct sockaddr_storage *addr)
    return len;
 }
 
-static uint32_t
-sip_request (void *buf, struct sockaddr_storage *addr, socklen_t addrlen, const char *method, const char *uri)
+static void
+ourip (char *buf, sa_family_t family)
+{
+   extern esp_netif_t *sta_netif;
+   *buf = 0;
+   if (family == AF_INET)
+   {
+      esp_netif_ip_info_t ip;
+      if (!esp_netif_get_ip_info (sta_netif, &ip) && ip.ip.addr)
+         sprintf (buf, IPSTR, IP2STR (&ip.ip));
+   } else if (family == AF_INET6)
+   {
+      esp_ip6_addr_t ip;
+      if (!esp_netif_get_ip6_global (sta_netif, &ip))
+         sprintf (buf, "[" IPV6STR "]", IPV62STR (ip));
+   }
+}
+
+static char *
+sip_request (void *buf, struct sockaddr_storage *addr, socklen_t addrlen, uint8_t cseq, const char *method, const char *uri,
+             uint32_t branch, uint64_t tag)
 {                               // make a SIP request
-   if (!method || !uri || strlen (uri) > SIP_MAX - 100)
-      return 0;
-   // TODO this needs expanding
-   char *p = buf,
-      *e = p + SIP_MAX;
+   if (!method || !uri || strlen (uri) > 256)
+      return NULL;
+   if (!strncmp (uri, "sip:", 4))
+      uri += 4;
+   char *p = buf;
    p += sprintf (p, "%s sip:%s SIP/2.0\r\n", method, uri);
+   if (tag)
+   {                            // Via
+      char us[42];
+      ourip (us, addr->ss_family);
+      p += sprintf (p, "Via: SIP/2.0/UDP %s;branch=z9hG4bK%llu-%lu;rport\r\n", us, tag, branch);
+   }
+   p += sprintf (p, "CSeq: %u %s\r\n", cseq, method);
+   p += sprintf (p, "Max-Forwards: 10\r\n");
+   return p;
+}
 
-
-
-   return p - (char *) buf;
+static void
+sip_tail (char **p, char *e, const char *data)
+{                               // Add remaining headers and content
+   extern const char *appname;
+   uint16_t l = 0;
+   if (data)
+      l = strlen (data);
+   char temp[10];
+   sprintf (temp, "%u", l);
+   sip_add_header (p, e, "Content-Length", temp, NULL);
+   sip_add_header (p, e, "User-Agent", appname, NULL);
+   if (*p < e)
+      *(*p)++ = '\r';
+   if (*p < e)
+      *(*p)++ = '\n';
+   if (l && (*p) + l <= e)
+   {
+      memcpy (*p, data, l);
+      (*p) += l;
+   }
 }
 
 // Start sip_task, set up details for registration (can be null if no registration needed)
@@ -210,6 +257,10 @@ sip_task (void *arg)
    sip_task_state_t state = 0;
    uint32_t retry = 0;          // Uptime for register retry
    uint32_t backoff = 0;
+   uint64_t regcallid = 0;
+   uint64_t regtag = 0;
+   uint8_t regseq = 0;
+   esp_fill_random (&regcallid, sizeof (regcallid));
    while (1)
    {
       sip_state_t status = sip.state;
@@ -230,6 +281,9 @@ sip_task (void *arg)
          if (len > 0)
          {
             ESP_LOGE (TAG, "SIP %d", len);
+
+
+
          }
          continue;
       }
@@ -241,13 +295,46 @@ sip_task (void *arg)
          sip.regexpiry = 0;     // Actually expired
       if (sip.regexpiry < now + 60 && sip.ichost && retry < now)
       {
+         const char *host = sip.ichost;
+         if (!strncmp (host, "sip:", 4))
+            host += 4;
+         const char *local = host;
+         const char *locale = strchr (local, '@');
+         if (locale)
+            host = locale + 1;
+         else
+         {
+            local = sip.icuser;
+            locale = local + strlen (local);
+         }
          if (!(addrlen = gethost (sip.ichost, SIP_PORT, &addr)))
             ESP_LOGE (TAG, "Failed to lookup %s", sip.ichost);
          else
          {                      // Send registration
-            len = sip_request (buf, &addr, addrlen, "REGISTER", sip.ichost);
-            if (!len || sendto (sock, buf, len, 0, (struct sockaddr *) &addr, addrlen) < 0)
-               ESP_LOGE (TAG, "Failed to send SIP (%d)", (int) len);
+            esp_fill_random (&regtag, sizeof (regtag));
+            if (!regtag)
+               regtag = 1;
+            regseq++;
+            extern const char revk_id[];
+            char *e = (char *) buf + SIP_MAX;
+            char *p = sip_request (buf, &addr, addrlen, regseq, "REGISTER", sip.ichost, 0, regtag);
+            if (p)
+            {
+               char us[42];
+               ourip (us, addr.ss_family);
+               char temp[256];
+               sprintf (temp, "sip:%.*s@%s", (int) (locale - local), local, us);
+               sip_add_header_angle (&p, e, "From", temp, NULL);
+               sprintf (temp, "sip:%.*s@%s", (int) (locale - local), local, sip.ichost);
+               sip_add_header_angle (&p, e, "To", temp, NULL);
+               sprintf (temp, "sip:%s@%s", revk_id, us);
+               sip_add_header (&p, e, "Contact", temp, NULL);
+               sprintf (temp, "%llu@%s", regcallid, revk_id);
+               sip_add_header (&p, e, "Call-ID", temp, NULL);
+               sip_add_header (&p, e, "Expires", "3600", NULL);
+               sip_tail (&p, (void *) buf + sizeof (buf), NULL);
+               sendto (sock, buf, (p - (char *) buf), 0, (struct sockaddr *) &addr, addrlen);
+            }
          }
          if (!backoff)
             backoff = 1;
