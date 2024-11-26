@@ -19,6 +19,9 @@ static const char __attribute__((unused)) * TAG = "SIP";
 #define	SIP_RTP		8888
 #define	SIP_MAX		1500
 
+extern const char *appname;
+extern const char revk_id[];
+
 static TaskHandle_t
 make_task (const char *tag, TaskFunction_t t, const void *param, int kstack)
 {                               // Make a task
@@ -157,7 +160,6 @@ sip_request (void *buf, struct sockaddr_storage *addr, socklen_t addrlen, uint8_
 static void
 sip_tail (char **p, char *e, const char *data)
 {                               // Add remaining headers and content
-   extern const char *appname;
    uint16_t l = 0;
    if (data)
       l = strlen (data);
@@ -280,7 +282,7 @@ sip_task (void *arg)
          len = recvfrom (sock, buf, sizeof (buf) - 1, 0, (struct sockaddr *) &addr, &addrlen);
          if (len > 0)
          {
-            ESP_LOGE (TAG, "SIP %d", len);
+            ESP_LOGE (TAG, "SIP %d\n%.*s", len, len, buf);
 
 
 
@@ -315,7 +317,6 @@ sip_task (void *arg)
             if (!regtag)
                regtag = 1;
             regseq++;
-            extern const char revk_id[];
             char *e = (char *) buf + SIP_MAX;
             char *p = sip_request (buf, &addr, addrlen, regseq, "REGISTER", sip.ichost, 0, regtag);
             if (p)
@@ -329,7 +330,7 @@ sip_task (void *arg)
                sip_add_header_angle (&p, e, "To", temp, NULL);
                sprintf (temp, "sip:%s@%s", revk_id, us);
                sip_add_header (&p, e, "Contact", temp, NULL);
-               sprintf (temp, "%llu@%s", regcallid, revk_id);
+               sprintf (temp, "%llu@%s.%s", regcallid, revk_id, appname);
                sip_add_header (&p, e, "Call-ID", temp, NULL);
                sip_add_header (&p, e, "Expires", "3600", NULL);
                sip_tail (&p, (void *) buf + sizeof (buf), NULL);
