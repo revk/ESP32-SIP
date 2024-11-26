@@ -1,11 +1,12 @@
-// SIP client
 
 static const char __attribute__((unused)) * TAG = "SIP";
 
 #include <stdint.h>
 #include <unistd.h>
 #include <string.h>
+#include <sys/types.h>
 #include <sys/socket.h>
+#include <netdb.h>
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -15,6 +16,7 @@ static const char __attribute__((unused)) * TAG = "SIP";
 
 #define	SIP_PORT	5060
 #define	SIP_RTP		8888
+#define	SIP_MAX		1500
 
 static TaskHandle_t
 make_task (const char *tag, TaskFunction_t t, const void *param, int kstack)
@@ -72,6 +74,7 @@ typedef enum __attribute__((__packed__))
 static struct
 {                               // Local data
    TaskHandle_t task;           // Task handle
+   SemaphoreHandle_t mutex;     // Mutex for this structure
    sip_callback_t *callback;    // The registered callback functions
    char *callid;                // Current call ID - we handle only one call at a time
    char *ichost;                // Registration details
@@ -89,7 +92,42 @@ static struct
    uint8_t hangup:1;            // Hangup required
 } sip = { 0 };
 
-// Generally not very thread safe
+static int
+gethost (const char *name, uint16_t port, struct sockaddr_storage *addr)
+{
+   int len = 0;
+   const struct addrinfo hint = {
+      .ai_family = AF_UNSPEC,
+      .ai_socktype = SOCK_DGRAM,
+      .ai_flags = AI_NUMERICSERV,
+   };
+   struct addrinfo *res = NULL;
+   memset (addr, 0, sizeof (*addr));
+   char ports[6];
+   sprintf (ports, "%d", port);
+   if (!getaddrinfo (name, ports, &hint, &res) && res->ai_addrlen)
+   {
+      memcpy (addr, res->ai_addr, res->ai_addrlen);
+      len = res->ai_addrlen;
+   }
+   freeaddrinfo (res);
+   return len;
+}
+
+static uint32_t
+sip_request (void *buf, struct sockaddr_storage *addr, socklen_t addrlen, const char *method, const char *uri)
+{                               // make a SIP request
+   if (!method || !uri || strlen (uri) > SIP_MAX - 100)
+      return 0;
+   // TODO this needs expanding
+   char *p = buf,
+      *e = p + SIP_MAX;
+   p += sprintf (p, "%s sip:%s SIP/2.0\r\n", method, uri);
+
+
+
+   return p - (char *) buf;
+}
 
 // Start sip_task, set up details for registration (can be null if no registration needed)
 void
@@ -97,23 +135,32 @@ sip_register (const char *host, const char *user, const char *pass, sip_callback
 {
    sip.callback = callback;
    if (!sip.task)
+   {
+      sip.mutex = xSemaphoreCreateBinary ();
+      xSemaphoreGive (sip.mutex);
       sip.task = make_task ("sip", sip_task, NULL, 8);
+   }
+   xSemaphoreTake (sip.mutex, portMAX_DELAY);
    if (replacestring (&sip.ichost, host) + replacestring (&sip.icuser, user) + replacestring (&sip.icpass, pass))
       sip.regexpiry = 0;        // Register
+   xSemaphoreGive (sip.mutex);
 }
 
 // Set up an outgoing call, proxy optional (taken from uri)
 int
 sip_call (const char *cli, const char *uri, const char *proxy, const char *user, const char *pass)
 {
-   if (sip.state > SIP_REGISTERED)
-      return 1;
-   replacestring (&sip.ogcli, cli);
-   replacestring (&sip.oghost, proxy);
-   replacestring (&sip.oguri, uri);
-   replacestring (&sip.oguser, user);
-   replacestring (&sip.ogpass, pass);
-   sip.call = 1;
+   xSemaphoreTake (sip.mutex, portMAX_DELAY);
+   if (sip.state <= SIP_REGISTERED)
+   {
+      replacestring (&sip.ogcli, cli);
+      replacestring (&sip.oghost, proxy);
+      replacestring (&sip.oguri, uri);
+      replacestring (&sip.oguser, user);
+      replacestring (&sip.ogpass, pass);
+      sip.call = 1;
+   }
+   xSemaphoreGive (sip.mutex);
    return 0;
 }
 
@@ -121,9 +168,10 @@ sip_call (const char *cli, const char *uri, const char *proxy, const char *user,
 int
 sip_answer (void)
 {
-   if (sip.state != SIP_IC_ALERT)
-      return 1;
-   sip.answer = 1;
+   xSemaphoreTake (sip.mutex, portMAX_DELAY);
+   if (sip.state == SIP_IC_ALERT)
+      sip.answer = 1;
+   xSemaphoreGive (sip.mutex);
    return 0;
 }
 
@@ -131,9 +179,10 @@ sip_answer (void)
 int
 sip_hangup (void)
 {
-   if (sip.state <= SIP_REGISTERED)
-      return 1;
-   sip.hangup = 1;
+   xSemaphoreTake (sip.mutex, portMAX_DELAY);
+   if (sip.state > SIP_REGISTERED)
+      sip.hangup = 1;
+   xSemaphoreGive (sip.mutex);
    return 0;
 }
 
@@ -164,13 +213,26 @@ sip_task (void *arg)
    while (1)
    {
       sip_state_t status = sip.state;
-      // Get packet and process
-      uint8_t buf[1500];
-      struct sockaddr_storage source_addr;
-      socklen_t socklen = sizeof (source_addr);
-      int res = recvfrom (sock, buf, sizeof (buf) - 1, 0, (struct sockaddr *) &source_addr, &socklen);
-      ESP_LOGE (TAG, "SIP %d", res);
 
+      uint8_t buf[SIP_MAX];
+      int len = 0;
+      struct sockaddr_storage addr;
+      socklen_t addrlen = 0;
+
+      fd_set r;
+      FD_ZERO (&r);
+      FD_SET (sock, &r);
+      struct timeval t = { 1, 0 };      // Wait 1 second
+      if (select (sock + 1, &r, NULL, NULL, &t) > 0)
+      {                         // Get packet and process
+         addrlen = sizeof (addr);
+         len = recvfrom (sock, buf, sizeof (buf) - 1, 0, (struct sockaddr *) &addr, &addrlen);
+         if (len > 0)
+         {
+            ESP_LOGE (TAG, "SIP %d", len);
+         }
+         continue;
+      }
 
       uint32_t now = uptime ();
 
@@ -179,15 +241,20 @@ sip_task (void *arg)
          sip.regexpiry = 0;     // Actually expired
       if (sip.regexpiry < now + 60 && sip.ichost && retry < now)
       {
-         // Send registration
-
+         if (!(addrlen = gethost (sip.ichost, SIP_PORT, &addr)))
+            ESP_LOGE (TAG, "Failed to lookup %s", sip.ichost);
+         else
+         {                      // Send registration
+            len = sip_request (buf, &addr, addrlen, "REGISTER", sip.ichost);
+            if (!len || sendto (sock, buf, len, 0, (struct sockaddr *) &addr, addrlen) < 0)
+               ESP_LOGE (TAG, "Failed to send SIP (%d)", (int) len);
+         }
          if (!backoff)
             backoff = 1;
          retry = now + backoff;
          if (backoff < 300)
             backoff *= 2;
       }
-
       // TODO giveup logic
 
       // Do periodic
@@ -263,7 +330,7 @@ sip_audio_task (void *arg)
    }
    while (1)
    {
-      uint8_t buf[1500];
+      uint8_t buf[SIP_MAX];
       struct sockaddr_storage source_addr;
       socklen_t socklen = sizeof (source_addr);
       int res = recvfrom (sock, buf, sizeof (buf) - 1, 0, (struct sockaddr *) &source_addr, &socklen);
