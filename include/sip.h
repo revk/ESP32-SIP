@@ -1,3 +1,5 @@
+// SIP
+#include <stdint.h>
 
 #define SIP_RATE        8000
 
@@ -21,11 +23,32 @@ extern const int16_t sip_rtp_to_pcm13[];
 // A mapping of 13 bits signed PCM (i.e. 8192 entries from -4096 to +4095) to RTP coding (alaw/ulaw)
 extern const uint8_t sip_pcm13_to_rtp[];
 
-// Function call for incoming RTP, a len 0 means end of call
-typedef void sip_rtp_rx_t(uint8_t len,const uint8_t *rtp);
+// SIP task related functions (task started automatically)
 
-// Register as client, returns 0 on error, else number of seconds until near expiry (i.e. when should register again)
-extern uint32_t sip_register(const char *server, const char *username,const char *password,sip_rtp_rx_t *rx);
+typedef enum __attribute__((__packed__))
+{
+   SIP_IDLE,                    // Not registered
+      SIP_REGISTERED,           // Idle, but registered for incoming calls
+      SIP_IC_ALERT,             // Incoming call is alerting, we can call sip_answer() or sip_hangup()
+      SIP_OG_ALERT,             // Outgoing call is alerting, we can call sip_hangup() to cancel
+      SIP_IC,                   // Incoming call is active
+      SIP_OG,                   // Outgoing call is active
+} sip_state_t;
 
-// Make a call, response is 200 if worked, else the call error code
-extern uint32_t sip_call(const char *server, const char *uri, const char *username,const char *password,sip_rtp_rx_t *rx);
+// Called on state change and for incoming audio (data NULL if no audio)
+typedef void sip_callback_t (sip_state_t state, uint8_t len, const uint8_t * data);
+
+// Send audio data for active call
+void sip_audio (uint8_t len, const uint8_t * data);
+
+// Start sip_task, set up details for registration (can be null if no registration needed)
+void sip_register (const char *host, const char *user, const char *pass, sip_callback_t * callback);
+
+// Set up an outgoing call, proxy optional (taken from uri)
+int sip_call (const char *cli, const char *uri, const char *proxy, const char *user, const char *pass);
+
+// Answer a call
+int sip_answer (void);
+
+// Hangup, cancel, or reject a call
+int sip_hangup (void);
