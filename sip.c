@@ -7,6 +7,7 @@ static const char __attribute__((unused)) * TAG = "SIP";
 #include <string.h>
 #include <sys/socket.h>
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "sip.h"
@@ -15,7 +16,7 @@ static const char __attribute__((unused)) * TAG = "SIP";
 #define	SIP_PORT	5060
 #define	SIP_RTP		8888
 
-TaskHandle_t
+static TaskHandle_t
 make_task (const char *tag, TaskFunction_t t, const void *param, int kstack)
 {                               // Make a task
    if (!kstack)
@@ -27,9 +28,17 @@ make_task (const char *tag, TaskFunction_t t, const void *param, int kstack)
    return task_id;
 }
 
+static uint32_t
+uptime (void)
+{
+   return esp_timer_get_time () / 1000000LL ? : 1;
+}
+
 int
 replacestring (char **target, const char *new)
-{                               // Replace a string pointer with new value, malloced, returns non zero if changed
+{                               // Replace a string pointer with new value, malloced, returns non zero if changed - empty strings are NULL
+   if (new && !*new)
+      new = NULL;
    char *old = *target;
    if (new && old && !strcmp (old, new))
       return 0;                 // No change
@@ -53,11 +62,11 @@ typedef enum __attribute__((__packed__))
       TASK_OG_WAIT,             // We have 1XX and waiting, we will send CANCELs if hangup set
       TASK_OG,                  // We are in an outgoing call
       TASK_OG_BYE,              // We are sending BYEs, awaiting reply
-      TASK_IG_ALERT,            // We are sending 180
-      TASK_IG_BUSY,             // We are sending 486, waiting ACK
-      TASK_IG_OK,               // We are sending 200, waiting ACK
-      TASK_IG,                  // We are in an incoming call
-      TASK_IG_BYE,              // We are sendin BYEs, awaiting reply
+      TASK_IC_ALERT,            // We are sending 180
+      TASK_IC_BUSY,             // We are sending 486, waiting ACK
+      TASK_IC_OK,               // We are sending 200, waiting ACK
+      TASK_IC,                  // We are in an incoming call
+      TASK_IC_BYE,              // We are sendin BYEs, awaiting reply
 } sip_task_state_t;
 
 static struct
@@ -131,7 +140,6 @@ sip_hangup (void)
 static void
 sip_task (void *arg)
 {
-   sip_task_state_t state = 0;
    // Set up sockets
    int sock = socket (AF_INET, SOCK_DGRAM, IPPROTO_IP);
    if (sock < 0)
@@ -148,9 +156,11 @@ sip_task (void *arg)
       vTaskDelete (NULL);
       return;
    }
-
    make_task ("sip-audio", sip_audio_task, NULL, 8);
    // Main loop
+   sip_task_state_t state = 0;
+   uint32_t retry = 0;          // Uptime for register retry
+   uint32_t backoff = 0;
    while (1)
    {
       sip_state_t status = sip.state;
@@ -162,37 +172,71 @@ sip_task (void *arg)
       ESP_LOGE (TAG, "SIP %d", res);
 
 
+      uint32_t now = uptime ();
+
       // Do registration logic
+      if (sip.regexpiry < now)
+         sip.regexpiry = 0;     // Actually expired
+      if (sip.regexpiry < now + 60 && sip.ichost && retry < now)
+      {
+         // Send registration
+
+         if (!backoff)
+            backoff = 1;
+         retry = now + backoff;
+         if (backoff < 300)
+            backoff *= 2;
+      }
+
+      // TODO giveup logic
 
       // Do periodic
       switch (state)
       {
       case TASK_IDLE:          // Not in a call
+         status = SIP_IDLE;
+         if (sip.call)
+         {                      // Start outgoing call
+
+            sip.call = 0;
+         }
          break;
       case TASK_OG_INVITE:     // We are sending INVITEs awaiting any response
+         status = SIP_IDLE;
          break;
       case TASK_OG_WAIT:       // We have 1XX and waiting, we will send CANCELs if hangup set
+         status = SIP_OG_ALERT;
          break;
       case TASK_OG:            // We are in an outgoing call
+         status = SIP_OG;
          break;
       case TASK_OG_BYE:        // We are sending BYEs, awaiting reply
+         status = SIP_IDLE;
          break;
-      case TASK_IG_ALERT:      // We are sending 180
+      case TASK_IC_ALERT:      // We are sending 180
+         status = SIP_IC_ALERT;
          break;
-      case TASK_IG_BUSY:       // We are sending 486, waiting ACK
+      case TASK_IC_BUSY:       // We are sending 486, waiting ACK
+         status = SIP_IDLE;
          break;
-      case TASK_IG_OK:         // We are sending 200, waiting ACK
+      case TASK_IC_OK:         // We are sending 200, waiting ACK
+         status = SIP_IC;
          break;
-      case TASK_IG:            // We are in an incoming call
+      case TASK_IC:            // We are in an incoming call
+         status = SIP_IC;
          break;
-      case TASK_IG_BYE:        // We are sendin BYEs, awaiting reply
+      case TASK_IC_BYE:        // We are sendin BYEs, awaiting reply
+         status = SIP_IDLE;
          break;
       }
+
       // Report status change
       if (status == SIP_IDLE && sip.regexpiry)
          status = SIP_REGISTERED;
       if (status == SIP_REGISTERED && !sip.regexpiry)
          status = SIP_IDLE;
+      if (status <= SIP_REGISTERED)
+         sip.answer = sip.hangup = 0;
       if (sip.state != status && sip.callback)
          sip.callback (sip.state = status, 0, NULL);
    }
