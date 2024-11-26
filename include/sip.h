@@ -2,6 +2,8 @@
 #include <stdint.h>
 
 #define SIP_RATE        8000
+#define	SIP_MS		20
+#define	SIP_BYTES	160
 
 #ifdef	SIP_ALAW
 #define SIP_CODING      "pcma"
@@ -35,11 +37,17 @@ typedef enum __attribute__((__packed__))
       SIP_OG,                   // Outgoing call is active
 } sip_state_t;
 
+// Audio
+// data NULL, len==0	No audio
+// data, len>0		Audio (should be 160 bytes every 20ms, as per #defines above)
+// data, len==0		Special case, data is NULL terminated string
+// data NULL, len>0	This is for non data, such as DTMF (TODO)
+
 // Called on state change and for incoming audio (data NULL if no audio)
 typedef void sip_callback_t (sip_state_t state, uint8_t len, const uint8_t * data);
 
 // Send audio data for active call
-void sip_audio (uint8_t len, const uint8_t * data);
+int sip_audio (uint8_t len, const uint8_t * data);
 
 // Start sip_task, set up details for registration (can be null if no registration needed)
 void sip_register (const char *host, const char *user, const char *pass, sip_callback_t * callback);
