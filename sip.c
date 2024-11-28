@@ -21,6 +21,7 @@ static const char __attribute__((unused)) * TAG = "SIP";
 
 extern const char *appname;
 extern const char revk_id[];
+extern void *mallocspi (size_t);
 
 static TaskHandle_t
 make_task (const char *tag, TaskFunction_t t, const void *param, int kstack)
@@ -40,22 +41,46 @@ uptime (void)
    return esp_timer_get_time () / 1000000LL ? : 1;
 }
 
-int
-replacestring (char **target, const char *new)
+static int
+store (char **target, const char *new, const char *newe)
 {                               // Replace a string pointer with new value, malloced, returns non zero if changed - empty strings are NULL
-   if (new && !*new)
-      new = NULL;
+   if (new && !newe)
+      newe = new + strlen (new);
+   if (new == newe)
+      new = newe = NULL;
    char *old = *target;
-   if (new && old && !strcmp (old, new))
-      return 0;                 // No change
    if (!new && !old)
       return 0;                 // No change
+   if (new && old)
+   {
+      const char *a = new,
+         *b = old;
+      while (a < newe && *a == *b)
+      {
+         a++;
+         b++;
+      }
+      if (a == newe && !*b)
+         return 0;              // No change
+   }
    if (new)
-      *target = strdup (new);
-   else
+   {
+      char *a = mallocspi (newe - new + 1);
+      memcpy (a, new, newe - new);
+      a[newe - new] = 0;
+      *target = a;
+   } else
       *target = NULL;
    free (old);
    return 1;
+}
+
+static void
+zap (char **target)
+{                               // Zap stored string
+   char *old = *target;
+   *target = NULL;
+   free (old);
 }
 
 static void sip_task (void *arg);
@@ -158,7 +183,7 @@ sip_request (void *buf, struct sockaddr_storage *addr, socklen_t addrlen, uint8_
 }
 
 static void
-sip_tail (char **p, char *e, const char *data)
+sip_content (char **p, char *e, const char *data)
 {                               // Add remaining headers and content
    uint16_t l = 0;
    if (data)
@@ -190,7 +215,7 @@ sip_register (const char *host, const char *user, const char *pass, sip_callback
       sip.task = make_task ("sip", sip_task, NULL, 8);
    }
    xSemaphoreTake (sip.mutex, portMAX_DELAY);
-   if (replacestring (&sip.ichost, host) + replacestring (&sip.icuser, user) + replacestring (&sip.icpass, pass))
+   if (store (&sip.ichost, host, NULL) + store (&sip.icuser, user, NULL) + store (&sip.icpass, pass, NULL))
       sip.regexpiry = 0;        // Register
    xSemaphoreGive (sip.mutex);
 }
@@ -202,11 +227,11 @@ sip_call (const char *cli, const char *uri, const char *proxy, const char *user,
    xSemaphoreTake (sip.mutex, portMAX_DELAY);
    if (sip.state <= SIP_REGISTERED)
    {
-      replacestring (&sip.ogcli, cli);
-      replacestring (&sip.oghost, proxy);
-      replacestring (&sip.oguri, uri);
-      replacestring (&sip.oguser, user);
-      replacestring (&sip.ogpass, pass);
+      store (&sip.ogcli, cli, NULL);
+      store (&sip.oghost, proxy, NULL);
+      store (&sip.oguri, uri, NULL);
+      store (&sip.oguser, user, NULL);
+      store (&sip.ogpass, pass, NULL);
       sip.call = 1;
    }
    xSemaphoreGive (sip.mutex);
@@ -267,7 +292,7 @@ sip_task (void *arg)
    {
       sip_state_t status = sip.state;
 
-      uint8_t buf[SIP_MAX];
+      char buf[SIP_MAX];
       int len = 0;
       struct sockaddr_storage addr;
       socklen_t addrlen = 0;
@@ -282,7 +307,7 @@ sip_task (void *arg)
          len = recvfrom (sock, buf, sizeof (buf) - 1, 0, (struct sockaddr *) &addr, &addrlen);
          if (len > 0)
          {
-            ESP_LOGE (TAG, "SIP %d\n%.*s", len, len, buf);
+            ESP_LOGE (TAG, "Rx\n%.*s", len, len, buf);
 
 
 
@@ -317,24 +342,22 @@ sip_task (void *arg)
             if (!regtag)
                regtag = 1;
             regseq++;
-            char *e = (char *) buf + SIP_MAX;
+            char *e = buf + SIP_MAX;
             char *p = sip_request (buf, &addr, addrlen, regseq, "REGISTER", sip.ichost, 0, regtag);
             if (p)
             {
                char us[42];
                ourip (us, addr.ss_family);
                char temp[256];
-               sprintf (temp, "sip:%.*s@%s", (int) (locale - local), local, us);
-               sip_add_header_angle (&p, e, "From", temp, NULL);
-               sprintf (temp, "sip:%.*s@%s", (int) (locale - local), local, sip.ichost);
-               sip_add_header_angle (&p, e, "To", temp, NULL);
-               sprintf (temp, "sip:%s@%s", revk_id, us);
-               sip_add_header (&p, e, "Contact", temp, NULL);
+               sip_add_header_angle (&p, e, "From", local,locale,us,NULL);
+               sip_add_header_angle (&p, e, "To", local,locale,sip.ichost,NULL);
+               sip_add_header_angle (&p, e, "Contact", revk_id,NULL,us,NULL);
                sprintf (temp, "%llu@%s.%s", regcallid, revk_id, appname);
                sip_add_header (&p, e, "Call-ID", temp, NULL);
                sip_add_header (&p, e, "Expires", "3600", NULL);
-               sip_tail (&p, (void *) buf + sizeof (buf), NULL);
-               sendto (sock, buf, (p - (char *) buf), 0, (struct sockaddr *) &addr, addrlen);
+               sip_content (&p, (void *) buf + sizeof (buf), NULL);
+               sendto (sock, buf, (p - buf), 0, (struct sockaddr *) &addr, addrlen);
+	       ESP_LOGE(TAG,"Tx\n%.*s",(int)(e-buf),buf);
             }
          }
          if (!backoff)
