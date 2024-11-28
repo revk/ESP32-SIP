@@ -1,15 +1,20 @@
 // SIP tools
 
+#ifndef	_GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include <stddef.h>
 #include <ctype.h>
 #include <string.h>
 #include <strings.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include "siptools.h"
 
-static inline const char *
-sip_skip_space (const char *s, const char *e)
+static inline cstring_t
+sip_skip_space (cstring_t s, cstring_t e)
 {
    if (!s)
       return NULL;
@@ -21,8 +26,8 @@ sip_skip_space (const char *s, const char *e)
    return s;
 }
 
-const char *
-sip_skip_display (const char *s, const char *e)
+cstring_t
+sip_skip_display (cstring_t s, cstring_t e)
 {                               // skip display string at start
    if (!s)
       return NULL;
@@ -44,7 +49,7 @@ sip_skip_display (const char *s, const char *e)
    {                            // make be token list
       while (s < e)
       {
-         const char *p = s;
+         cstring_t p = s;
          while (p < e &&
                 (isalpha ((int) *(unsigned char *) p) || isdigit ((int) *(unsigned char *) p) || *p == '-' || *p == '.' || *p == '!'
                  || *p == '%' || *p == '*' || *p == '_' || *p == '+' || *p == '`' || *p == '\'' || *p == '~'))
@@ -61,8 +66,8 @@ sip_skip_display (const char *s, const char *e)
    return sip_skip_space (s, e);
 }
 
-const char *
-sip_find_display (const char *s, const char *e, const char **end)
+cstring_t
+sip_find_display (cstring_t s, cstring_t e, cstring_t * end)
 {                               // find display name
    if (end)
       *end = NULL;
@@ -71,7 +76,7 @@ sip_find_display (const char *s, const char *e, const char **end)
    if (!e)
       e = s + strlen (s);
    s = sip_skip_space (s, e);
-   const char *q = sip_skip_display (s, e);
+   cstring_t q = sip_skip_display (s, e);
    while (q > s && (q[-1] == ' ' || q[-1] == 9 || q[-1] == '\n' || q[-1] == '\r'))
       q--;
    if (q == s)
@@ -87,7 +92,7 @@ sip_find_display (const char *s, const char *e, const char **end)
 }
 
 int
-sip_esc_cmp (const char *s, const char *e, const char *c)
+sip_esc_cmp (cstring_t s, cstring_t e, cstring_t c)
 {                               // compare escaped s-e with un-escaped null terminated c
    if (!s && !c)
       return 0;
@@ -122,7 +127,7 @@ sip_esc_cmp (const char *s, const char *e, const char *c)
 }
 
 int
-sip_esc_esc_cmp (const char *s, const char *e, const char *s2, const char *e2)
+sip_esc_esc_cmp (cstring_t s, cstring_t e, cstring_t s2, cstring_t e2)
 {                               // compare escaped with escaped
    if (!s && !s2)
       return 0;
@@ -164,8 +169,8 @@ sip_esc_esc_cmp (const char *s, const char *e, const char *s2, const char *e2)
    return 0;
 }
 
-const char *
-sip_find_request (const char *p, const char *e, const char **end)
+cstring_t
+sip_find_request (cstring_t p, cstring_t e, cstring_t * end)
 {
    if (end)
       *end = NULL;
@@ -173,7 +178,7 @@ sip_find_request (const char *p, const char *e, const char **end)
       return NULL;
    if (!e)
       e = p + strlen (p);
-   const char *l = p;
+   cstring_t l = p;
    while (l < e && *l >= ' ')
       l++;                      // end of line
    e = l;
@@ -181,7 +186,7 @@ sip_find_request (const char *p, const char *e, const char **end)
       p++;
    while (p < e && *p == ' ')
       p++;
-   const char *s = p;
+   cstring_t s = p;
    while (p < e && *p > ' ')
       p++;
    if (end)
@@ -189,8 +194,8 @@ sip_find_request (const char *p, const char *e, const char **end)
    return s;
 }
 
-const char *
-sip_find_local (const char *s, const char *e, const char **end)
+cstring_t
+sip_find_local (cstring_t s, cstring_t e, cstring_t * end)
 {                               // extract local part of URI
    if (end)
       *end = NULL;
@@ -200,7 +205,7 @@ sip_find_local (const char *s, const char *e, const char **end)
       e = s + strlen (s);
    if (s + 4 <= e && !strncasecmp (s, "sip:", 4))
       s += 4;
-   const char *a;
+   cstring_t a;
    for (a = s; a < e && *a != '@'; a++);
    if (a == e)
       return NULL;              // no local part
@@ -209,8 +214,8 @@ sip_find_local (const char *s, const char *e, const char **end)
    return s;
 }
 
-const char *
-sip_find_uri (const char *s, const char *e, const char **end)
+cstring_t
+sip_find_uri (cstring_t s, cstring_t e, cstring_t * end)
 {                               // find URI
    if (end)
       *end = NULL;
@@ -218,7 +223,7 @@ sip_find_uri (const char *s, const char *e, const char **end)
       return NULL;
    if (!e)
       e = s + strlen (s);
-   const char *p;
+   cstring_t p;
    s = sip_skip_display (s, e);
    if (s < e && *s == ',')
       s = sip_skip_space (s + 1, e);
@@ -241,8 +246,8 @@ sip_find_uri (const char *s, const char *e, const char **end)
    return s;
 }
 
-const char *
-sip_find_host (const char *s, const char *e, const char **end)
+cstring_t
+sip_find_host (cstring_t s, cstring_t e, cstring_t * end)
 {                               // find Host part
    if (end)
       *end = NULL;
@@ -253,7 +258,7 @@ sip_find_host (const char *s, const char *e, const char **end)
    s = sip_find_uri (s, e, &e);
    if (!s)
       return NULL;
-   const char *p;
+   cstring_t p;
    for (p = s; p < e && isalpha ((int) *(unsigned char *) p); p++);     // sip: on front
    if (p < e && *p == ':')
       s = p + 1;
@@ -279,8 +284,8 @@ sip_find_host (const char *s, const char *e, const char **end)
    return s;
 }
 
-const char *
-sip_find_semi (const char *s, const char *e, const char *tag, const char **end)
+cstring_t
+sip_find_semi (cstring_t s, cstring_t e, cstring_t tag, cstring_t * end)
 {                               // look for specific semicolon separated parameter field
    if (end)
       *end = NULL;
@@ -304,12 +309,12 @@ sip_find_semi (const char *s, const char *e, const char *tag, const char **end)
          s++;
          continue;
       }
-      const char *q = s;
+      cstring_t q = s;
       while (s < e && *s > ' ' && *s != '=' && *s != ';' && *s != ',')
          s++;
       if (s > q)
       {
-         const char *z = s;
+         cstring_t z = s;
          while (z > q && (z[-1] == 9 || z[-1] == ' '))
             z--;
          if (z > q && q + strlen (tag) == z && !strncasecmp (tag, q, z - q))
@@ -321,7 +326,7 @@ sip_find_semi (const char *s, const char *e, const char *tag, const char **end)
                return s;
             }
             s++;
-            const char *q = s;
+            cstring_t q = s;
             while (q < e && *q != ';' && *q != ',')
                q++;
             while (q > s && (q[-1] == 9 || q[-1] == ' '))
@@ -341,8 +346,8 @@ sip_find_semi (const char *s, const char *e, const char *tag, const char **end)
    return NULL;
 }
 
-const char *
-sip_find_comma (const char *s, const char *e, const char *tag, const char **end)
+cstring_t
+sip_find_comma (cstring_t s, cstring_t e, cstring_t tag, cstring_t * end)
 {                               // look for specific comma separated parameter field
    if (end)
       *end = NULL;
@@ -354,15 +359,15 @@ sip_find_comma (const char *s, const char *e, const char *tag, const char **end)
    while (s < e)
    {
       s = sip_skip_space (s, e);
-      const char *q = s;
+      cstring_t q = s;
       while (s < e && *s > ' ' && *s != '=')
          s++;
       if (s == e || *s != '=')
          continue;
-      const char *qe = s;
+      cstring_t qe = s;
       s++;
-      const char *v = s,
-         *ve;
+      cstring_t v = s,
+         ve;
       if (s < e && *s == '"')
       {
          s++;
@@ -397,8 +402,8 @@ sip_find_comma (const char *s, const char *e, const char *tag, const char **end)
    return NULL;
 }
 
-const char *
-sip_find_list (const char *p, const char *e, const char **end)
+cstring_t
+sip_find_list (cstring_t p, cstring_t e, cstring_t * end)
 {                               // finds command separated fields within a value of a header
    if (end)
       *end = NULL;
@@ -411,7 +416,7 @@ sip_find_list (const char *p, const char *e, const char **end)
       p = sip_skip_space (p + 1, e);    // skip commas and empt
    if (!p || p == e)
       return NULL;
-   const char *s = p;
+   cstring_t s = p;
    while (p && p < e && *p != ',')
    {
       if (*p == '"')
@@ -428,8 +433,8 @@ sip_find_list (const char *p, const char *e, const char **end)
    return s;
 }
 
-const char *
-sip_find_header (const char *p, const char *e, const char *head, const char *alt, const char **end, const char *prev)
+cstring_t
+sip_find_header (cstring_t p, cstring_t e, cstring_t head, cstring_t alt, cstring_t * end, cstring_t prev)
 {                               // finds header, after prev returns start of header value, and sets end. Does not include final CRLF
    if (end)
       *end = NULL;
@@ -461,12 +466,12 @@ sip_find_header (const char *p, const char *e, const char *head, const char *alt
       if (p == e || *p == '\r' || *p == '\n')
          return NULL;           // end of headers?
       // start of line
-      const char *s = p;
+      cstring_t s = p;
       while (p < e && *p > ' ' && *p != ':')
          p++;
       if (p == s)
          return NULL;           // end of headers or something very strange
-      const char *q = p;
+      cstring_t q = p;
       while (p < e && (*p == ' ' || *p == 9))
          p++;
       if (s == q || p == e || *p != ':')
@@ -481,7 +486,7 @@ sip_find_header (const char *p, const char *e, const char *head, const char *alt
    p++;
    while (p < e && (*p == 9 || *p == ' '))      // LWS allowed here... so could fold? TODO remove folding in rx?
       p++;
-   const char *s = p;
+   cstring_t s = p;
    while (p < e)
    {
       while (p < e && (*p == 9 || *p >= ' '))
@@ -503,7 +508,7 @@ sip_find_header (const char *p, const char *e, const char *head, const char *alt
 }
 
 static inline void
-add_c (char **const pp, const char *e, char c)
+add_c (string_t * pp, cstring_t e, char c)
 {
    if ((*pp) >= e)
       return;
@@ -511,7 +516,7 @@ add_c (char **const pp, const char *e, char c)
 }
 
 static inline void
-add_e (char * *const pp, const char *e, char c)
+add_e (string_t * pp, cstring_t e, char c)
 {
    static const char base16[] = "0123456789ABCDEF";
    if (isalpha (c) || isdigit (c) || c == '_' || c == '-' || c == '*' || c == '.')
@@ -525,7 +530,7 @@ add_e (char * *const pp, const char *e, char c)
 }
 
 static inline char *
-add_eol (char **const pp, const char *e)
+add_eol (string_t * pp, cstring_t e)
 {
    add_c (pp, e, '\r');
    add_c (pp, e, '\n');
@@ -534,12 +539,12 @@ add_eol (char **const pp, const char *e)
    return *pp;
 }
 
-const char *
-sip_add_texte (char **const pp, const char *e, const char *text, const char *texte)
+cstring_t
+sip_add_texte (string_t * pp, cstring_t e, cstring_t text, cstring_t texte)
 {
    if (!text)
       return NULL;
-   const char *p = *pp;
+   cstring_t p = *pp;
    if (!e)
       e = p + strlen (p);
    if (!texte)
@@ -549,12 +554,12 @@ sip_add_texte (char **const pp, const char *e, const char *text, const char *tex
    return *pp;
 }
 
-char *
-sip_add_esce (char **pp, const char *e, const char *text, const char *texte)
+cstring_t
+sip_add_esce (string_t * pp, cstring_t e, cstring_t text, cstring_t texte)
 {
    if (!text)
       return NULL;
-   char *p = *pp;
+   cstring_t p = *pp;
    if (!e)
       e = p + strlen (p);
    if (!texte)
@@ -564,8 +569,8 @@ sip_add_esce (char **pp, const char *e, const char *text, const char *texte)
    return *pp;
 }
 
-const char *
-sip_add_header (char **const pp, const char *e, const char *head, const char *start, const char *end)
+cstring_t
+sip_add_headere (string_t * pp, cstring_t e, cstring_t head, cstring_t start, cstring_t end)
 {                               // add a header
    if (!start)
       return NULL;
@@ -575,12 +580,27 @@ sip_add_header (char **const pp, const char *e, const char *head, const char *st
    return add_eol (pp, e);
 }
 
-const char *
-sip_add_header_angle (char **const pp, const char *e, const char *head, const char *local, const char *locale, const char *domain,
-                      const char *domaine)
+cstring_t
+sip_add_headerf (string_t * pp, cstring_t e, cstring_t head, cstring_t fmt, ...)
 {                               // add a header
    sip_add_text (pp, e, head);
-   sip_add_text(pp,e,":<sip:");
+   add_c (pp, e, ':');
+   char *field = NULL;
+   va_list ap;
+   va_start (ap, fmt);
+   vasprintf (&field, fmt, ap);
+   va_end (ap);
+   sip_add_text (pp, e, field);
+   free (field);
+   return add_eol (pp, e);
+}
+
+cstring_t
+sip_add_header_angle (string_t * pp, cstring_t e, cstring_t head, cstring_t local, cstring_t locale, cstring_t domain,
+                      cstring_t domaine)
+{                               // add a header
+   sip_add_text (pp, e, head);
+   sip_add_text (pp, e, ":<sip:");
    if (local)
       sip_add_esce (pp, e, local, locale);
    if (local && domain)
@@ -591,9 +611,8 @@ sip_add_header_angle (char **const pp, const char *e, const char *head, const ch
    return add_eol (pp, e);
 }
 
-const char *
-sip_add_extra (char **const pp, const char *e, const char *tag, const char *start, const char *end, char comma, char quote,
-               char wrap)
+cstring_t
+sip_add_extra (string_t * pp, cstring_t e, cstring_t tag, cstring_t start, cstring_t end, char comma, char quote, char wrap)
 {                               // append value to existing header (quoted)
    if (start && !end)
       end = start + strlen (start);
@@ -648,7 +667,7 @@ sip_add_extra (char **const pp, const char *e, const char *tag, const char *star
 }
 
 unsigned int
-sip_deescape (char *t, char *et, const char *f, const char *ef)
+sip_deescape (string_t t, cstring_t et, cstring_t f, cstring_t ef)
 {                               // SIP specific URI decode - not like normal URI decode, returns length of response
    if (!f)
    {

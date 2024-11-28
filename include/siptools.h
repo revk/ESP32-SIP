@@ -2,37 +2,47 @@
 
 // Setting any start but not end will assume end is end of NULL terminated string from start
 
+typedef	char *string_t;
+typedef	const char *cstring_t;
+
 // Move passed a display (i.e "...")
-const char *sip_skip_display(const char *s, const char *e);
+cstring_t sip_skip_display(cstring_t s, cstring_t e);
 
 // Find functions take start (s) and end (e) and look for a thing in that range
 // They return NULL if not found, or the start of what was found, and store end of what was found in end (if not NULL)
-const char *sip_find_display(const char *s, const char *e, const char **end);
-const char *sip_find_request(const char *p, const char *e, const char **end);
-const char *sip_find_local(const char *s, const char *e, const char **end);
-const char *sip_find_uri(const char *s, const char *e, const char **end);
-const char *sip_find_host(const char *s, const char *e, const char **end);
-const char *sip_find_semi(const char *s, const char *e, const char *tag, const char **end);
-const char *sip_find_comma(const char *s, const char *e, const char *tag, const char **end);
-const char *sip_find_list(const char *p, const char *e, const char **end);
-const char *sip_find_header(const char *p, const char * e, const char *head, const char *alt, const char **end, const char *prev);
+cstring_t sip_find_display(cstring_t s, cstring_t e, cstring_t *end);
+cstring_t sip_find_request(cstring_t s, cstring_t e, cstring_t *end);
+cstring_t sip_find_local(cstring_t s, cstring_t e, cstring_t *end);
+cstring_t sip_find_uri(cstring_t s, cstring_t e, cstring_t *end);
+cstring_t sip_find_host(cstring_t s, cstring_t e, cstring_t *end);
+cstring_t sip_find_semi(cstring_t s, cstring_t e, cstring_t tag, cstring_t *end);
+cstring_t sip_find_comma(cstring_t s, cstring_t e, cstring_t tag, cstring_t *end);
+cstring_t sip_find_list(cstring_t s, cstring_t e, cstring_t *end);
+cstring_t sip_find_header(cstring_t s, cstring_t  e, cstring_t head, cstring_t alt, cstring_t *end, cstring_t prev);
 
 // Add functions add to end of a buffer at *pp not going beyond e, the move *pp on
 // In some cases it is assumed *pp has /r/n before it, which can be stripped back
-const char *sip_add_texte(char ** const pp, const char *e, const char *text,const char *texte);
+cstring_t sip_add_texte(string_t* pp, cstring_t e, cstring_t text,cstring_t texte);
 #define	sip_add_text(p,e,t)	sip_add_texte(p,e,t,NULL)
 
-const char *sip_add_esc(char ** const pp, const char *e, const char *text,const char *texte);
+cstring_t sip_add_esce(string_t* pp, cstring_t e, cstring_t text,cstring_t texte);
 #define	sip_add_esc(p,e,t)	sip_add_esce(p,e,t,NULL)
 
-const char *sip_add_header(char ** const pp, const char *e, const char *head, const char *start, const char *end);
-const char *sip_add_header_angle(char ** const pp, const char *e, const char *head, const char *local,const char *locale,const char *domain,const char *domaine);
+cstring_t sip_add_headere(string_t* pp, cstring_t e, cstring_t head, cstring_t start, cstring_t end);
+#define	sip_add_header(p,e,h,s) sip_add_headere(p,e,h,s,NULL)
+cstring_t sip_add_headerf(string_t* pp, cstring_t e, cstring_t head, cstring_t fmt,...);
+cstring_t sip_add_header_angle(string_t* pp, cstring_t e, cstring_t head, cstring_t local,cstring_t locale,cstring_t domain,cstring_t domaine);
 
-const char *sip_add_extra(char ** const pp, const char *e, const char *tag, const char *start, const char *end, char comma, char quote, char wrap);
+cstring_t sip_add_extra(string_t* pp, cstring_t e, cstring_t tag, cstring_t start, cstring_t end, char comma, char quote, char wrap);
+#define sip_add_comma(pp,E,t,s,e) sip_add_extra(pp,E,t,s,e,',',0,0)
+#define sip_add_comma_quote(pp,E,t,s,e) sip_add_extra(pp,E,t,s,e,',','"',0)
+#define sip_add_semi(pp,E,t,s,e) sip_add_extra(pp,E,t,s,e,';',0,0)
+#define sip_add_semi_quote(pp,E,t,s,e) sip_add_extra(pp,E,t,s,e,';','"',0)
 
 // Simple de-escaping from and to
-unsigned int sip_deescape(char *t, char *et, const char *f, const char *ef);
+unsigned int sip_deescape(string_t t,cstring_t et, cstring_t f, cstring_t ef);
 
 // Escaped comparisons
-int sip_esc_cmp(const char *s, const char *e, const char *c);
-int sip_esc_esc_cmp(const char *s, const char *e, const char *s2, const char *e2);
+int sip_esc_cmp(cstring_t s, cstring_t e, cstring_t c);
+int sip_esc_esc_cmp(cstring_t s, cstring_t e, cstring_t s2, cstring_t e2);
+

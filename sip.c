@@ -19,12 +19,13 @@ static const char __attribute__((unused)) * TAG = "SIP";
 #define	SIP_RTP		8888
 #define	SIP_MAX		1500
 
-extern const char *appname;
+extern cstring_t appname;
 extern const char revk_id[];
+extern cstring_t revk_version;
 extern void *mallocspi (size_t);
 
 static TaskHandle_t
-make_task (const char *tag, TaskFunction_t t, const void *param, int kstack)
+make_task (cstring_t tag, TaskFunction_t t, const void *param, int kstack)
 {                               // Make a task
    if (!kstack)
       kstack = 8;               // Default 8k
@@ -42,19 +43,19 @@ uptime (void)
 }
 
 static int
-store (char **target, const char *new, const char *newe)
+store (string_t * target, cstring_t new, cstring_t newe)
 {                               // Replace a string pointer with new value, malloced, returns non zero if changed - empty strings are NULL
    if (new && !newe)
       newe = new + strlen (new);
    if (new == newe)
       new = newe = NULL;
-   char *old = *target;
+   string_t old = *target;
    if (!new && !old)
       return 0;                 // No change
    if (new && old)
    {
-      const char *a = new,
-         *b = old;
+      cstring_t a = new,
+         b = old;
       while (a < newe && *a == *b)
       {
          a++;
@@ -65,22 +66,69 @@ store (char **target, const char *new, const char *newe)
    }
    if (new)
    {
-      char *a = mallocspi (newe - new + 1);
+      string_t a = mallocspi (newe - new + 1);
       memcpy (a, new, newe - new);
       a[newe - new] = 0;
       *target = a;
    } else
       *target = NULL;
-   free (old);
+   free ((void *) old);
    return 1;
 }
 
 static void
-zap (char **target)
+zap (string_t * target)
 {                               // Zap stored string
-   char *old = *target;
+   string_t old = *target;
    *target = NULL;
    free (old);
+}
+
+static void
+make_digest (string_t dig, cstring_t username, cstring_t eusername, cstring_t realm, cstring_t erealm, cstring_t password,
+             cstring_t epassword, cstring_t method, cstring_t emethod, cstring_t uri, cstring_t euri, cstring_t nonce, cstring_t enonce,
+             cstring_t nc, cstring_t enc, cstring_t cnonce, cstring_t ecnonce, cstring_t qop, cstring_t eqop)
+{                               // dig is response and must allow 33 bytes
+   unsigned char md5buf[16];
+   char a1[33],
+     a2[33];
+   int i;
+   MD5_CTX c;
+   MD5_Init (&c);
+   MD5_Update (&c, username, eusername - username);
+   MD5_Update (&c, ":", 1);
+   MD5_Update (&c, realm, erealm - realm);
+   MD5_Update (&c, ":", 1);
+   MD5_Update (&c, password, epassword - password);
+   MD5_Final (md5buf, &c);
+   for (i = 0; i < 16; i++)
+      sprintf (a1 + i * 2, "%02x", md5buf[i]);
+   MD5_Init (&c);
+   MD5_Update (&c, method, emethod - method);
+   MD5_Update (&c, ":", 1);
+   MD5_Update (&c, uri, euri - uri);
+   MD5_Final (md5buf, &c);
+   for (i = 0; i < 16; i++)
+      sprintf (a2 + i * 2, "%02x", md5buf[i]);
+   MD5_Init (&c);
+   MD5_Update (&c, a1, 32);
+   MD5_Update (&c, ":", 1);
+   MD5_Update (&c, nonce, enonce - nonce);
+   if (qop)
+   {
+      MD5_Update (&c, ":", 1);
+      MD5_Update (&c, nc, enc - nc);
+      MD5_Update (&c, ":", 1);
+      MD5_Update (&c, cnonce, ecnonce - cnonce);
+      MD5_Update (&c, ":", 1);
+      MD5_Update (&c, qop, eqop - qop);
+   }
+   MD5_Update (&c, ":", 1);
+   MD5_Update (&c, a2, 32);
+   MD5_Final (md5buf, &c);
+   for (i = 0; i < 16; i++)
+      sprintf (dig + i * 2, "%02x", md5buf[i]);
+   //log(logid_(&config->voip,debug), "Auth %s %.32s %s A1 %s A2 %s", dig, response, password, a1, a2);
 }
 
 static void sip_task (void *arg);
@@ -122,7 +170,7 @@ static struct
 } sip = { 0 };
 
 static int
-gethost (const char *name, uint16_t port, struct sockaddr_storage *addr)
+gethost (cstring_t name, uint16_t port, struct sockaddr_storage *addr)
 {
    int len = 0;
    const struct addrinfo hint = {
@@ -162,36 +210,44 @@ ourip (char *buf, sa_family_t family)
 }
 
 static char *
-sip_request (void *buf, struct sockaddr_storage *addr, socklen_t addrlen, uint8_t cseq, const char *method, const char *uri,
+sip_request (void *buf, struct sockaddr_storage *addr, socklen_t addrlen, uint8_t cseq, cstring_t method, cstring_t uri,
              uint32_t branch, uint64_t tag)
 {                               // make a SIP request
    if (!method || !uri || strlen (uri) > 256)
       return NULL;
    if (!strncmp (uri, "sip:", 4))
       uri += 4;
-   char *p = buf;
-   p += sprintf (p, "%s sip:%s SIP/2.0\r\n", method, uri);
+   char *p = buf,
+      *e = buf + SIP_MAX;
+   sip_add_text (&p, e, method);
+   sip_add_text (&p, e, " sip:");
+   sip_add_esc (&p, e, uri);
+   sip_add_text (&p, e, " SIP/2.0\r\n");
    if (tag)
    {                            // Via
       char us[42];
       ourip (us, addr->ss_family);
-      p += sprintf (p, "Via: SIP/2.0/UDP %s;branch=z9hG4bK%llu-%lu;rport\r\n", us, tag, branch);
+      sip_add_headerf (&p, e, "Via", "SIP/2.0/UDP %s", us);
+      char b[100];
+      sprintf (b, "z9hG4bK%llu-%lu", tag, branch);
+      sip_add_extra (&p, e, "branch", b, NULL, ';', 0, 0);
+      sip_add_extra (&p, e, "rport", NULL, NULL, ';', 0, 0);
    }
-   p += sprintf (p, "CSeq: %u %s\r\n", cseq, method);
-   p += sprintf (p, "Max-Forwards: 10\r\n");
+   char c[50];
+   sprintf (c, "%u %s", cseq, method);
+   sip_add_header (&p, e, "CSeq", c);
+   sip_add_header (&p, e, "Max-Forwards", "10");
    return p;
 }
 
 static void
-sip_content (char **p, char *e, const char *data)
+sip_content (char **const p, cstring_t e, cstring_t data)
 {                               // Add remaining headers and content
    uint16_t l = 0;
    if (data)
       l = strlen (data);
-   char temp[10];
-   sprintf (temp, "%u", l);
-   sip_add_header (p, e, "Content-Length", temp, NULL);
-   sip_add_header (p, e, "User-Agent", appname, NULL);
+   sip_add_headerf (p, e, "Content-Length", "%u", l);
+   sip_add_headerf (p, e, "User-Agent", "%s-%s", appname, revk_version);
    if (*p < e)
       *(*p)++ = '\r';
    if (*p < e)
@@ -203,9 +259,56 @@ sip_content (char **p, char *e, const char *data)
    }
 }
 
+
+void
+sip_auth (string_t buf, string_t * pp, cstring_t e, uint16_t code, cstring_t auth, cstring_t user, cstring_t pass)
+{
+   if (code == 401)
+      sip_add_header (pp, e, "Authorization", "Digest ");
+   else if (code == 407)
+      sip_add_header (pp, e, "Proxy-Authorization", "Digest ");
+   else
+      return;
+   cstring_t method = buf,
+      methode = buf;;
+   while (methode < e && isalpha ((int) *(unsigned char *) methode))
+      methode++;
+   cstring_t euri,
+     uri = sip_find_request (buf, e, &euri);
+   cstring_t eqop,
+     qop = sip_find_comma (auth, NULL, "qop", &eqop);
+   char cnonce[17];
+   {
+      unsigned long long cn;
+      esp_fill_random (&cn, sizeof (cn));
+      sprintf (cnonce, "%016llX", cn);
+   }
+#define x(t) cstring_t e##t,t=sip_find_comma(auth,NULL,#t,&e##t);if(t)sip_add_comma(pp,e,#t,t,e##t)
+#define qx(t) cstring_t e##t,t=sip_find_comma(auth,NULL,#t,&e##t);if(t)sip_add_comma_quote(pp,e,#t,t,e##t)
+   sip_add_comma_quote (pp, e, "username", user, NULL);
+   if (!auth || !pass)
+      return;
+   qx (realm);
+   qx (nonce);
+   sip_add_comma_quote (pp, e, "uri", uri, euri);
+   const char nc[] = "00000001";        // As we do not cache and reuse nonces the nc we send will always be 1 as first use of nonce
+   char dig[33];
+   make_digest (dig, user, user + strlen (user), realm, erealm, pass, pass + strlen (pass),
+                method, methode, uri, euri, nonce, enonce, nc, nc + strlen (nc), cnonce, cnonce + strlen (cnonce), qop, eqop);
+   sip_add_comma_quote (pp, e, "response", dig, dig + 32);
+   x (algorithm);
+   sip_add_comma_quote (pp, e, "cnonce", cnonce, NULL);
+   qx (opaque);
+   if (qop)
+      sip_add_comma (pp, e, "qop", qop, eqop);  // Yes, not quoted in response
+   sip_add_comma (pp, e, "nc", nc, NULL);
+#undef x
+#undef qx
+}
+
 // Start sip_task, set up details for registration (can be null if no registration needed)
 void
-sip_register (const char *host, const char *user, const char *pass, sip_callback_t * callback)
+sip_register (cstring_t host, cstring_t user, cstring_t pass, sip_callback_t * callback)
 {
    sip.callback = callback;
    if (!sip.task)
@@ -222,7 +325,7 @@ sip_register (const char *host, const char *user, const char *pass, sip_callback
 
 // Set up an outgoing call, proxy optional (taken from uri)
 int
-sip_call (const char *cli, const char *uri, const char *proxy, const char *user, const char *pass)
+sip_call (cstring_t cli, cstring_t uri, cstring_t proxy, cstring_t user, cstring_t pass)
 {
    xSemaphoreTake (sip.mutex, portMAX_DELAY);
    if (sip.state <= SIP_REGISTERED)
@@ -282,11 +385,13 @@ sip_task (void *arg)
    make_task ("sip-audio", sip_audio_task, NULL, 8);
    // Main loop
    sip_task_state_t state = 0;
-   uint32_t retry = 0;          // Uptime for register retry
-   uint32_t backoff = 0;
+   uint32_t regretry = 0;       // Uptime for register retry
+   uint32_t regbackoff = 0;
    uint64_t regcallid = 0;
    uint64_t regtag = 0;
    uint8_t regseq = 0;
+   string_t regauth = NULL;
+   uint16_t regcode = 0;
    esp_fill_random (&regcallid, sizeof (regcallid));
    while (1)
    {
@@ -305,12 +410,80 @@ sip_task (void *arg)
       {                         // Get packet and process
          addrlen = sizeof (addr);
          len = recvfrom (sock, buf, sizeof (buf) - 1, 0, (struct sockaddr *) &addr, &addrlen);
-         if (len > 0)
+         if (len > 10)
          {
             ESP_LOGE (TAG, "Rx\n%.*s", len, buf);
+            cstring_t e = buf + len;
+            if (!strncmp (buf, "SIP/", 4))
+            {                   // Response
+               char *p = buf + 4;
+               while (p < e && *p != ' ')
+                  p++;
+               if (p < e)
+               {
+                  int code = 0;
+                  p++;
+                  while (p < e && isdigit ((int) *(unsigned char *) p))
+                     code = code * 10 + *p++ - '0';
+                  cstring_t methode,
+                    method = sip_find_header (buf, e, "CSeq", NULL, &methode, NULL);
+                  if (method)
+                  {
+                     int seq = 0;
+                     while (method < methode && isdigit ((int) *(unsigned char *) method))
+                        seq = seq * 10 + *method++ - '0';
+                     while (method < methode && *method == ' ')
+                        method++;
+                     if (methode - method == 8 && !strncasecmp (method, "REGISTER", 8))
+                     {          // REGISTER reply
+                        if (seq == regseq)
+                        {
+                           if (code == 401 || code == 407)
+                           {
+                              cstring_t authe,
+                               
+                                 auth =
+                                 sip_find_header (buf, e, code == 401 ? "WWW-Authenticate" : "Proxy-Authenticate", NULL, &authe,
+                                                  NULL);
+                              store (&regauth, auth, authe);
+                              if (regauth)
+                              {
+                                 regbackoff = regretry = 0;
+                                 regcode = code;
+                              }
+                           } else if (code == 209)
+                           {    // Registered
+                              // TODO expiry?
+                           }
+                        }
+                     } else if (methode - method == 6 && !strncasecmp (method, "INVITE", 6))
+                     {          // INVITE reply
 
+                     } else if (methode - method == 6 && !strncasecmp (method, "CANCEL", 6))
+                     {          // CANCEL reply
 
+                     } else if (methode - method == 3 && !strncasecmp (method, "BYE", 3))
+                     {          // CANCEL reply
 
+                     }
+                  }
+               }
+            } else
+            {                   // Request
+               cstring_t method = buf,
+                  methode = buf;
+               while (methode < e && isalpha ((int) *(unsigned char *) methode))
+                  methode++;
+               if (methode - method == 6 && !strncasecmp (method, "INVITE", 6))
+               {                // INVITE
+
+               } else if (methode - method == 6 && !strncasecmp (method, "CANCEL", 6))
+               {                // CANCEL
+               } else if (methode - method == 3 && !strncasecmp (method, "BYE", 3))
+               {                // BYE
+
+               }
+            }
          }
          continue;
       }
@@ -320,13 +493,13 @@ sip_task (void *arg)
       // Do registration logic
       if (sip.regexpiry < now)
          sip.regexpiry = 0;     // Actually expired
-      if (sip.regexpiry < now + 60 && sip.ichost && retry < now)
+      if (sip.regexpiry < now + 60 && sip.ichost && regretry < now)
       {
-         const char *host = sip.ichost;
+         cstring_t host = sip.ichost;
          if (!strncmp (host, "sip:", 4))
             host += 4;
-         const char *local = host;
-         const char *locale = strchr (local, '@');
+         cstring_t local = host;
+         cstring_t locale = strchr (local, '@');
          if (locale)
             host = locale + 1;
          else
@@ -348,23 +521,25 @@ sip_task (void *arg)
             {
                char us[42];
                ourip (us, addr.ss_family);
-               char temp[256];
-               sip_add_header_angle (&p, e, "From", local,locale,us,NULL);
-               sip_add_header_angle (&p, e, "To", local,locale,sip.ichost,NULL);
-               sip_add_header_angle (&p, e, "Contact", revk_id,NULL,us,NULL);
-               sprintf (temp, "%llu@%s.%s", regcallid, revk_id, appname);
-               sip_add_header (&p, e, "Call-ID", temp, NULL);
-               sip_add_header (&p, e, "Expires", "3600", NULL);
+               sip_add_header_angle (&p, e, "From", local, locale, us, NULL);
+               sip_add_header_angle (&p, e, "To", local, locale, sip.ichost, NULL);
+               sip_add_header_angle (&p, e, "Contact", revk_id, NULL, us, NULL);
+               sip_add_headerf (&p, e, "Call-ID", "%llu@%s.%s", regcallid, revk_id, appname);
+               sip_add_header (&p, e, "Expires", "3600");
+               if (regauth)
+                  sip_auth (buf, &p, e, regcode, regauth, sip.icuser, sip.icpass);
                sip_content (&p, (void *) buf + sizeof (buf), NULL);
                sendto (sock, buf, (p - buf), 0, (struct sockaddr *) &addr, addrlen);
-	       ESP_LOGE(TAG,"Tx\n%.*s",(int)(p-buf),buf);
+               ESP_LOGE (TAG, "Tx\n%.*s", (int) (p - buf), buf);
+               regcode = 0;
+               zap (&regauth);
             }
          }
-         if (!backoff)
-            backoff = 1;
-         retry = now + backoff;
-         if (backoff < 300)
-            backoff *= 2;
+         if (!regbackoff)
+            regbackoff = 1;
+         regretry = now + regbackoff;
+         if (regbackoff < 300)
+            regbackoff *= 2;
       }
       // TODO giveup logic
 
