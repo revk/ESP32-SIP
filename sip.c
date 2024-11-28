@@ -307,7 +307,7 @@ sip_task (void *arg)
          len = recvfrom (sock, buf, sizeof (buf) - 1, 0, (struct sockaddr *) &addr, &addrlen);
          if (len > 0)
          {
-            ESP_LOGE (TAG, "Rx\n%.*s", len, len, buf);
+            ESP_LOGE (TAG, "Rx\n%.*s", len, buf);
 
 
 
