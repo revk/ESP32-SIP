@@ -19,6 +19,7 @@ static const char __attribute__((unused)) * TAG = "SIP";
 #define	SIP_PORT	5060
 #define	SIP_RTP		8888
 #define	SIP_MAX		1500
+#define	SIP_EXPIRY	3600
 
 extern cstring_t appname;
 extern const char revk_id[];
@@ -107,7 +108,7 @@ make_digest (string_t dig, cstring_t username, cstring_t eusername, cstring_t re
          hex (md5buf[i] >> 4);
          hex (md5buf[i] & 0xF);
       }
-      *o=0;
+      *o = 0;
    }
    mbedtls_md5_context c;
    mbedtls_md5_init (&c);
@@ -117,15 +118,15 @@ make_digest (string_t dig, cstring_t username, cstring_t eusername, cstring_t re
    mbedtls_md5_update (&c, (void *) ":", 1);
    mbedtls_md5_update (&c, (void *) password, epassword - password);
    mbedtls_md5_finish (&c, md5buf);
-   hex(a1);
-   ESP_LOGE(TAG,"A1 %s %.*s:%.*s:%.*s",a1,(int)(eusername-username),username,(int)(erealm-realm),realm,(int)(epassword-password),password);
+   hex (a1);
+   //ESP_LOGE (TAG, "A1 %s %.*s:%.*s:%.*s", a1, (int) (eusername - username), username, (int) (erealm - realm), realm, (int) (epassword - password), password);
    mbedtls_md5_init (&c);
    mbedtls_md5_update (&c, (void *) method, emethod - method);
    mbedtls_md5_update (&c, (void *) ":", 1);
    mbedtls_md5_update (&c, (void *) uri, euri - uri);
    mbedtls_md5_finish (&c, md5buf);
-   hex(a2);
-   ESP_LOGE(TAG,"A2 %s %.*s:%.*s",a2,(int)(emethod-method),method,(int)(euri-uri),uri);
+   hex (a2);
+   //ESP_LOGE (TAG, "A2 %s %.*s:%.*s", a2, (int) (emethod - method), method, (int) (euri - uri), uri);
    mbedtls_md5_init (&c);
    mbedtls_md5_update (&c, (void *) a1, 32);
    mbedtls_md5_update (&c, (void *) ":", 1);
@@ -142,8 +143,8 @@ make_digest (string_t dig, cstring_t username, cstring_t eusername, cstring_t re
    mbedtls_md5_update (&c, (void *) ":", 1);
    mbedtls_md5_update (&c, (void *) a2, 32);
    mbedtls_md5_finish (&c, md5buf);
-   hex(dig);
-   ESP_LOGE(TAG,"D  %s %s:%.*s:%.*s:%.*s:%.*s:%s",dig,a1,(int)(enonce-nonce),nonce,(int)(enc-nc),nc,(int)(ecnonce-cnonce),cnonce,(int)(eqop-qop),qop,a2);
+   hex (dig);
+   //ESP_LOGE (TAG, "D  %s %s:%.*s:%.*s:%.*s:%.*s:%s", dig, a1, (int) (enonce - nonce), nonce, (int) (enc - nc), nc, (int) (ecnonce - cnonce), cnonce, (int) (eqop - qop), qop, a2);
    mbedtls_md5_free (&c);
 }
 
@@ -421,6 +422,7 @@ sip_task (void *arg)
       fd_set r;
       FD_ZERO (&r);
       FD_SET (sock, &r);
+      uint32_t now = uptime ();
       struct timeval t = { 1, 0 };      // Wait 1 second
       if (select (sock + 1, &r, NULL, NULL, &t) > 0)
       {                         // Get packet and process
@@ -429,20 +431,20 @@ sip_task (void *arg)
          if (len > 10)
          {
             ESP_LOGE (TAG, "Rx\n%.*s", len, buf);
-            cstring_t e = buf + len;
+            cstring_t bufe = buf + len;
             if (!strncmp (buf, "SIP/", 4))
             {                   // Response
                char *p = buf + 4;
-               while (p < e && *p != ' ')
+               while (p < bufe && *p != ' ')
                   p++;
-               if (p < e)
+               if (p < bufe)
                {
                   int code = 0;
                   p++;
-                  while (p < e && isdigit ((int) *(unsigned char *) p))
+                  while (p < bufe && isdigit ((int) *(unsigned char *) p))
                      code = code * 10 + *p++ - '0';
                   cstring_t methode,
-                    method = sip_find_header (buf, e, "CSeq", NULL, &methode, NULL);
+                    method = sip_find_header (buf, bufe, "CSeq", NULL, &methode, NULL);
                   if (method)
                   {
                      int seq = 0;
@@ -459,15 +461,68 @@ sip_task (void *arg)
                               cstring_t authe,
                                
                                  auth =
-                                 sip_find_header (buf, e, code == 401 ? "WWW-Authenticate" : "Proxy-Authenticate", NULL, &authe,
+                                 sip_find_header (buf, bufe, code == 401 ? "WWW-Authenticate" : "Proxy-Authenticate", NULL, &authe,
                                                   NULL);
                               store (&regauth, auth, authe);
                               if (regauth)
                                  regcode = code;
                            } else if (code == 200)
                            {    // Registered
-                              // TODO expiry?
-				   regbackoff=0;
+                              cstring_t p,
+                                e;
+                              regbackoff = 0;
+                              uint32_t cexpires = SIP_EXPIRY;
+                              p = sip_find_header (buf, bufe, "Expires", NULL, &e, NULL);
+                              if (p)
+                              {
+                                 uint32_t v = 0;
+                                 while (p < e && isdigit ((int) *(unsigned char *) p))
+                                    v = v * 10 + *p++ - '0';
+                                 cexpires = v;
+                              }
+                              p = NULL;
+                              uint32_t maxexp = 0;
+                              while (1)
+                              { // Find contact
+                                 p = sip_find_header (buf, bufe, "Contact", "m", &e, p);
+                                 if (!p)
+                                    break;
+                                 cstring_t n = p;
+                                 while (1)
+                                 {
+                                    cstring_t m,
+                                      me;
+                                    m = sip_find_list (n, e, &me);
+                                    if (!m)
+                                       break;
+                                    n = me;
+                                    cstring_t u = NULL,
+                                       ue = NULL;
+                                    u = sip_find_uri (m, me, &ue);
+                                    if (!u)
+                                       continue;
+                                    u = sip_find_local (u, ue, &ue);
+                                    if (!u || ue - u != strlen (revk_id) || strncmp (e, revk_id, ue - u))
+                                       continue;
+                                    cstring_t x,
+                                      xe;
+                                    x = sip_find_semi (m, me, "expires", &xe);
+                                    if (x && isdigit ((int) *(unsigned char *) x))
+                                    {
+                                       uint32_t v = 0;
+                                       while (x < xe && isdigit ((int) *(unsigned char *) x))
+                                          v = v * 10 + *x++ - '0';
+                                       if (v > maxexp)
+                                          maxexp = v;
+                                    }
+                                    p = e;      // done
+                                    break;
+                                 }
+                              }
+
+                              if (maxexp)
+                                 cexpires = maxexp;
+                              sip.regexpiry = now + cexpires;
                            }
                         }
                      } else if (methode - method == 6 && !strncasecmp (method, "INVITE", 6))
@@ -486,7 +541,7 @@ sip_task (void *arg)
             {                   // Request
                cstring_t method = buf,
                   methode = buf;
-               while (methode < e && isalpha ((int) *(unsigned char *) methode))
+               while (methode < bufe && isalpha ((int) *(unsigned char *) methode))
                   methode++;
                if (methode - method == 6 && !strncasecmp (method, "INVITE", 6))
                {                // INVITE
@@ -501,9 +556,6 @@ sip_task (void *arg)
          }
          continue;
       }
-
-      uint32_t now = uptime ();
-
       // Do registration logic
       if (sip.regexpiry < now)
          sip.regexpiry = 0;     // Actually expired
@@ -539,7 +591,7 @@ sip_task (void *arg)
                sip_add_header_angle (&p, e, "To", local, locale, sip.ichost, NULL);
                sip_add_header_angle (&p, e, "Contact", revk_id, NULL, us, NULL);
                sip_add_headerf (&p, e, "Call-ID", "%llu@%s.%s", regcallid, revk_id, appname);
-               sip_add_header (&p, e, "Expires", "3600");
+               sip_add_headerf (&p, e, "Expires", "%d", SIP_EXPIRY);
                if (regauth)
                   sip_auth (buf, &p, e, regcode, regauth, sip.icuser, sip.icpass);
                sip_content (&p, (void *) buf + sizeof (buf), NULL);
