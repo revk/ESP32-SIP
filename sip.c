@@ -14,6 +14,7 @@ static const char __attribute__((unused)) * TAG = "SIP";
 #include "freertos/task.h"
 #include "sip.h"
 #include "siptools.h"
+#include "mbedtls/md5.h"
 
 #define	SIP_PORT	5060
 #define	SIP_RTP		8888
@@ -86,49 +87,64 @@ zap (string_t * target)
 
 static void
 make_digest (string_t dig, cstring_t username, cstring_t eusername, cstring_t realm, cstring_t erealm, cstring_t password,
-             cstring_t epassword, cstring_t method, cstring_t emethod, cstring_t uri, cstring_t euri, cstring_t nonce, cstring_t enonce,
-             cstring_t nc, cstring_t enc, cstring_t cnonce, cstring_t ecnonce, cstring_t qop, cstring_t eqop)
+             cstring_t epassword, cstring_t method, cstring_t emethod, cstring_t uri, cstring_t euri, cstring_t nonce,
+             cstring_t enonce, cstring_t nc, cstring_t enc, cstring_t cnonce, cstring_t ecnonce, cstring_t qop, cstring_t eqop)
 {                               // dig is response and must allow 33 bytes
    unsigned char md5buf[16];
    char a1[33],
      a2[33];
-   int i;
-   MD5_CTX c;
-   MD5_Init (&c);
-   MD5_Update (&c, username, eusername - username);
-   MD5_Update (&c, ":", 1);
-   MD5_Update (&c, realm, erealm - realm);
-   MD5_Update (&c, ":", 1);
-   MD5_Update (&c, password, epassword - password);
-   MD5_Final (md5buf, &c);
-   for (i = 0; i < 16; i++)
-      sprintf (a1 + i * 2, "%02x", md5buf[i]);
-   MD5_Init (&c);
-   MD5_Update (&c, method, emethod - method);
-   MD5_Update (&c, ":", 1);
-   MD5_Update (&c, uri, euri - uri);
-   MD5_Final (md5buf, &c);
-   for (i = 0; i < 16; i++)
-      sprintf (a2 + i * 2, "%02x", md5buf[i]);
-   MD5_Init (&c);
-   MD5_Update (&c, a1, 32);
-   MD5_Update (&c, ":", 1);
-   MD5_Update (&c, nonce, enonce - nonce);
+   inline void hex (char *o)
+   {
+      inline void hex (int i)
+      {
+         if (i >= 10)
+            *o++ = 'a' + i - 10;
+         else
+            *o++ = i + '0';
+      }
+      for (int i = 0; i < 16; i++)
+      {
+         hex (md5buf[i] >> 4);
+         hex (md5buf[i] & 0xF);
+      }
+      *o=0;
+   }
+   mbedtls_md5_context c;
+   mbedtls_md5_init (&c);
+   mbedtls_md5_update (&c, (void *) username, eusername - username);
+   mbedtls_md5_update (&c, (void *) ":", 1);
+   mbedtls_md5_update (&c, (void *) realm, erealm - realm);
+   mbedtls_md5_update (&c, (void *) ":", 1);
+   mbedtls_md5_update (&c, (void *) password, epassword - password);
+   mbedtls_md5_finish (&c, md5buf);
+   hex(a1);
+   ESP_LOGE(TAG,"A1 %s %.*s:%.*s:%.*s",a1,(int)(eusername-username),username,(int)(erealm-realm),realm,(int)(epassword-password),password);
+   mbedtls_md5_init (&c);
+   mbedtls_md5_update (&c, (void *) method, emethod - method);
+   mbedtls_md5_update (&c, (void *) ":", 1);
+   mbedtls_md5_update (&c, (void *) uri, euri - uri);
+   mbedtls_md5_finish (&c, md5buf);
+   hex(a2);
+   ESP_LOGE(TAG,"A2 %s %.*s:%.*s",a2,(int)(emethod-method),method,(int)(euri-uri),uri);
+   mbedtls_md5_init (&c);
+   mbedtls_md5_update (&c, (void *) a1, 32);
+   mbedtls_md5_update (&c, (void *) ":", 1);
+   mbedtls_md5_update (&c, (void *) nonce, enonce - nonce);
    if (qop)
    {
-      MD5_Update (&c, ":", 1);
-      MD5_Update (&c, nc, enc - nc);
-      MD5_Update (&c, ":", 1);
-      MD5_Update (&c, cnonce, ecnonce - cnonce);
-      MD5_Update (&c, ":", 1);
-      MD5_Update (&c, qop, eqop - qop);
+      mbedtls_md5_update (&c, (void *) ":", 1);
+      mbedtls_md5_update (&c, (void *) nc, enc - nc);
+      mbedtls_md5_update (&c, (void *) ":", 1);
+      mbedtls_md5_update (&c, (void *) cnonce, ecnonce - cnonce);
+      mbedtls_md5_update (&c, (void *) ":", 1);
+      mbedtls_md5_update (&c, (void *) qop, eqop - qop);
    }
-   MD5_Update (&c, ":", 1);
-   MD5_Update (&c, a2, 32);
-   MD5_Final (md5buf, &c);
-   for (i = 0; i < 16; i++)
-      sprintf (dig + i * 2, "%02x", md5buf[i]);
-   //log(logid_(&config->voip,debug), "Auth %s %.32s %s A1 %s A2 %s", dig, response, password, a1, a2);
+   mbedtls_md5_update (&c, (void *) ":", 1);
+   mbedtls_md5_update (&c, (void *) a2, 32);
+   mbedtls_md5_finish (&c, md5buf);
+   hex(dig);
+   ESP_LOGE(TAG,"D  %s %s:%.*s:%.*s:%.*s:%.*s:%s",dig,a1,(int)(enonce-nonce),nonce,(int)(enc-nc),nc,(int)(ecnonce-cnonce),cnonce,(int)(eqop-qop),qop,a2);
+   mbedtls_md5_free (&c);
 }
 
 static void sip_task (void *arg);
@@ -447,13 +463,11 @@ sip_task (void *arg)
                                                   NULL);
                               store (&regauth, auth, authe);
                               if (regauth)
-                              {
-                                 regbackoff = regretry = 0;
                                  regcode = code;
-                              }
-                           } else if (code == 209)
+                           } else if (code == 200)
                            {    // Registered
                               // TODO expiry?
+				   regbackoff=0;
                            }
                         }
                      } else if (methode - method == 6 && !strncasecmp (method, "INVITE", 6))
