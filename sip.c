@@ -357,7 +357,7 @@ sip_task (void *arg)
                sip_add_header (&p, e, "Expires", "3600", NULL);
                sip_content (&p, (void *) buf + sizeof (buf), NULL);
                sendto (sock, buf, (p - buf), 0, (struct sockaddr *) &addr, addrlen);
-	       ESP_LOGE(TAG,"Tx\n%.*s",(int)(e-buf),buf);
+	       ESP_LOGE(TAG,"Tx\n%.*s",(int)(p-buf),buf);
             }
          }
          if (!backoff)
