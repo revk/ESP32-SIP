@@ -1,6 +1,8 @@
 // SIP
 #include <stdint.h>
 
+#define	SIP_ALAW
+
 #define SIP_RATE        8000
 #define	SIP_MS		20
 #define	SIP_BYTES	160

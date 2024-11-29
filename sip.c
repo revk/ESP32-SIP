@@ -256,22 +256,41 @@ sip_request (void *buf, struct sockaddr_storage *addr, socklen_t addrlen, uint8_
 }
 
 static void
-sip_content (char **const p, cstring_t e, uint8_t rtp)
+sip_content (char **const p, cstring_t e, cstring_t us)
 {                               // Add remaining headers and content
+   char rtp[300];
    uint16_t l = 0;
-   if (rtp)
+   if (us)
    {                            // Make RTP to add
-
+      uint8_t usl = strlen (us);
+      cstring_t ip = "4";
+      if (*us == '[')
+      {
+         us++;
+         usl--;
+         ip = "6";
+      }
+      l = sprintf (rtp, "v=0\r\n"       //
+                   "o- %u 0 IN IP%s %.*s\r\n"   //
+                   "s=call\r\n" //
+                   "c=IN IP%s %.*s\r\n" //
+                   "t=0 0\r\n"  //
+                   "m=audio %u RTP/AVP 8 101\r\n"       //
+                   "a=rtpmap:%u %s/%u\r\n"      //
+                   "a=rtpmap:101 telephone-event/8000\r\n"      //
+                   "a=ptime:%u\r\n"     //
+                   "a=sendrecv\r\n",    //
+                   SIP_RTP, ip, usl, us, ip, usl, us, SIP_RTP, SIP_PT, SIP_CODING, SIP_RATE, SIP_MS);
    }
    sip_add_headerf (p, e, "Content-Length", "%u", l);
+   if (l)
+      sip_add_header (p, e, "Content-Type", "application/sdp");
    sip_add_headerf (p, e, "User-Agent", "%s-%s", appname, revk_version);
-   if (*p < e)
-      *(*p)++ = '\r';
-   if (*p < e)
-      *(*p)++ = '\n';
-   if (rtp)
+   sip_add_eol (p, e);
+   if (l && (*p) + l < e)
    {                            // Add RTP
-      // TODO
+      memcpy (*p, rtp, l);
+      (*p) += l;
    }
 }
 
@@ -302,7 +321,16 @@ sip_response (struct sockaddr_storage *addr, cstring_t r, string_t b, uint64_t t
    copy ("Call-ID", "i");
    copy ("From", "f");
    copy ("To", "t");
-   // TODO add tag if no tag already
+   if (tag)
+   {
+      p = sip_find_semi (p, e, "tag", &e);
+      if (!p)
+      {
+         char t[21];
+         sprintf (t, "%llu", tag);
+         sip_add_extra (&b, be, "tag", t, NULL, ';', 0, 0);
+      }
+   }
    return b;
 }
 
@@ -321,7 +349,7 @@ sip_error (int sock, socklen_t addrlen, struct sockaddr_storage *from, cstring_t
    string_t p = sip_response (&addr, request, buf, 0, code);
    if (!p)
       return;
-   sip_content (&p, (void *) buf + sizeof (buf), 0);
+   sip_content (&p, (void *) buf + sizeof (buf), NULL);
    sip_send (sock, buf, p, &addr, addrlen);
 }
 
@@ -380,7 +408,7 @@ sip_register (cstring_t host, cstring_t user, cstring_t pass, sip_callback_t * c
    {
       sip.mutex = xSemaphoreCreateBinary ();
       xSemaphoreGive (sip.mutex);
-      sip.task = make_task ("sip", sip_task, NULL, 8);
+      sip.task = make_task ("sip", sip_task, NULL, 10);
    }
    xSemaphoreTake (sip.mutex, portMAX_DELAY);
    if (store (&sip.ichost, host, NULL) + store (&sip.icuser, user, NULL) + store (&sip.icpass, pass, NULL))
@@ -722,7 +750,7 @@ sip_task (void *arg)
                sip_add_headerf (&p, e, "Expires", "%d", SIP_EXPIRY);
                if (regauth)
                   sip_auth (buf, &p, e, regcode, regauth, sip.icuser, sip.icpass);
-               sip_content (&p, (void *) buf + sizeof (buf), 0);
+               sip_content (&p, (void *) buf + sizeof (buf), NULL);
                sip_send (sock, buf, p, &addr, addrlen);
                regcode = 0;
                zap (&regauth);
@@ -784,7 +812,9 @@ sip_task (void *arg)
                }
             }
             string_t e = sip_response (&calladdr, invite, buf, calltag, callcode);
-            sip_content (&e, (void *) buf + sizeof (buf), 1);
+            char us[42];
+            ourip (us, calladdr.ss_family);
+            sip_content (&e, (void *) buf + sizeof (buf), us);
             sip_send (sock, buf, e, &calladdr, calladdrlen);
             if (callcode == 100)
                callcode = 180;  // Move on to alerting
@@ -843,6 +873,7 @@ sip_audio_task (void *arg)
       socklen_t socklen = sizeof (source_addr);
       int res = recvfrom (sock, buf, sizeof (buf) - 1, 0, (struct sockaddr *) &source_addr, &socklen);
       ESP_LOGE (TAG, "RTP %d", res);
+      // TODO callback if sensible state
    }
 }
 

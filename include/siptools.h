@@ -39,6 +39,8 @@ cstring_t sip_add_extra(string_t* pp, cstring_t e, cstring_t tag, cstring_t star
 #define sip_add_semi(pp,E,t,s,e) sip_add_extra(pp,E,t,s,e,';',0,0)
 #define sip_add_semi_quote(pp,E,t,s,e) sip_add_extra(pp,E,t,s,e,';','"',0)
 
+cstring_t sip_add_eol(string_t* pp, cstring_t e);
+
 // Simple de-escaping from and to
 unsigned int sip_deescape(string_t t,cstring_t et, cstring_t f, cstring_t ef);
 

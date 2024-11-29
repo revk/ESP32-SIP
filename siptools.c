@@ -529,8 +529,8 @@ add_e (string_t * pp, cstring_t e, char c)
    }
 }
 
-static inline char *
-add_eol (string_t * pp, cstring_t e)
+inline cstring_t
+sip_add_eol (string_t * pp, cstring_t e)
 {
    add_c (pp, e, '\r');
    add_c (pp, e, '\n');
@@ -577,7 +577,7 @@ sip_add_headere (string_t * pp, cstring_t e, cstring_t head, cstring_t start, cs
    sip_add_text (pp, e, head);
    add_c (pp, e, ':');
    sip_add_texte (pp, e, start, end);
-   return add_eol (pp, e);
+   return sip_add_eol (pp, e);
 }
 
 cstring_t
@@ -592,7 +592,7 @@ sip_add_headerf (string_t * pp, cstring_t e, cstring_t head, cstring_t fmt, ...)
    va_end (ap);
    sip_add_text (pp, e, field);
    free (field);
-   return add_eol (pp, e);
+   return sip_add_eol (pp, e);
 }
 
 cstring_t
@@ -608,7 +608,7 @@ sip_add_header_angle (string_t * pp, cstring_t e, cstring_t head, cstring_t loca
    if (domain)
       sip_add_esce (pp, e, domain, domaine);
    add_c (pp, e, '>');
-   return add_eol (pp, e);
+   return sip_add_eol (pp, e);
 }
 
 cstring_t
