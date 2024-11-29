@@ -40,10 +40,10 @@ typedef enum __attribute__((__packed__))
 } sip_state_t;
 
 // Audio
-// data NULL, len==0	No audio
-// data, len>0		Audio (should be 160 bytes every 20ms, as per #defines above)
+// data NULL, len==0	No audio - just state info
+// data, len>1		Audio (should be 160 bytes every 20ms, as per #defines above)
+// data, len==1		DTMF (code is in one byte in data)
 // data, len==0		Special case, data is NULL terminated string
-// data NULL, len>0	This is for non data, such as DTMF (TODO)
 
 // Called on state change and for incoming audio (data NULL if no audio)
 typedef void sip_callback_t (sip_state_t state, uint8_t len, const uint8_t * data);

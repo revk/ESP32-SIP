@@ -768,6 +768,8 @@ sip_task (void *arg)
       switch (state)
       {
       case TASK_IDLE:          // Not in a call
+         zap (&invite);
+         zap (&callid);
          sip.giveup = 0;
          status = SIP_IDLE;
          if (sip.call)
@@ -871,9 +873,25 @@ sip_audio_task (void *arg)
       uint8_t buf[SIP_MAX];
       struct sockaddr_storage source_addr;
       socklen_t socklen = sizeof (source_addr);
-      int res = recvfrom (sock, buf, sizeof (buf) - 1, 0, (struct sockaddr *) &source_addr, &socklen);
-      ESP_LOGE (TAG, "RTP %d", res);
-      // TODO callback if sensible state
+      int len = recvfrom (sock, buf, sizeof (buf) - 1, 0, (struct sockaddr *) &source_addr, &socklen);
+      if (len < 8 || !sip.callback || !sip.state)
+         continue;
+      uint16_t head = 12;
+      if ((*buf & 0xC0) != 0x80)
+         continue;              // Not v2
+      if (*buf & 0x20)
+         len -= buf[len - 1];   // padding
+      head += (*buf & 0xF) * 4; // CSRC
+      if (*buf & 0x10)
+         head += 4 * ((buf[head + 2] << 8) + buf[head + 3]) + 4;        // Extension
+      if (head >= len)
+         continue;              // Silly
+      // We are ignoring sequence and timestamp for now - we may want to pass these on or buffer and reorder in due course
+      uint8_t pt = (buf[1] & 0x7F);
+      if (pt == 101 && (buf[1] & 0x80))
+         sip.callback (sip.state, 1, buf + head);
+      else if (pt == SIP_PT)
+         sip.callback (sip.state, len - head, buf + head);
    }
 }
 
