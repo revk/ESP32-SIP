@@ -158,9 +158,7 @@ typedef enum __attribute__((__packed__))
       TASK_OG_WAIT,             // We have 1XX and waiting, we will send CANCELs if hangup set
       TASK_OG,                  // We are in an outgoing call
       TASK_OG_BYE,              // We are sending BYEs, awaiting reply
-      TASK_IC_ALERT,            // We are sending 180
-      TASK_IC_BUSY,             // We are sending 486, waiting ACK
-      TASK_IC_OK,               // We are sending 200, waiting ACK
+      TASK_IC_PROGRESS,         // We are sending progress
       TASK_IC,                  // We are in an incoming call
       TASK_IC_BYE,              // We are sendin BYEs, awaiting reply
 } sip_task_state_t;
@@ -180,6 +178,7 @@ static struct
    char *oguser;                // Outgoing call details
    char *ogpass;                // Outgoing call details
    uint32_t regexpiry;          // Registration expiry
+   uint32_t giveup;             // Call handling expiry
    sip_state_t state;           // Status reported by sip_callback
    uint8_t call:1;              // Outgoing call required
    uint8_t answer:1;            // Answer required
@@ -258,21 +257,22 @@ sip_request (void *buf, struct sockaddr_storage *addr, socklen_t addrlen, uint8_
 }
 
 static void
-sip_content (char **const p, cstring_t e, cstring_t data)
+sip_content (char **const p, cstring_t e, uint8_t rtp)
 {                               // Add remaining headers and content
    uint16_t l = 0;
-   if (data)
-      l = strlen (data);
+   if (rtp)
+   {                            // Make RTP to add
+
+   }
    sip_add_headerf (p, e, "Content-Length", "%u", l);
    sip_add_headerf (p, e, "User-Agent", "%s-%s", appname, revk_version);
    if (*p < e)
       *(*p)++ = '\r';
    if (*p < e)
       *(*p)++ = '\n';
-   if (l && (*p) + l <= e)
-   {
-      memcpy (*p, data, l);
-      (*p) += l;
+   if (rtp)
+   {                            // Add RTP
+      // TODO
    }
 }
 
@@ -291,7 +291,7 @@ sip_response (struct sockaddr_storage *addr, cstring_t r, string_t b, uint64_t t
       // TODO
 
    }
-   b += sprintf (b, "SIP/2.0 %u Error %u\r\n", code, code);
+   b += sprintf (b, "SIP/2.0 %u Code %u\r\n", code, code);
    void copy (cstring_t l, cstring_t s)
    {
       p = sip_find_header (r, re, l, s, &e, NULL);
@@ -308,6 +308,13 @@ sip_response (struct sockaddr_storage *addr, cstring_t r, string_t b, uint64_t t
 }
 
 static void
+sip_send (int sock, cstring_t p, cstring_t e, struct sockaddr_storage *addr, socklen_t addrlen)
+{
+   sendto (sock, p, (e - p), 0, (struct sockaddr *) addr, addrlen);
+   ESP_LOGE (TAG, "Tx\n%.*s", (int) (e - p), p);
+}
+
+static void
 sip_error (int sock, socklen_t addrlen, struct sockaddr_storage *from, cstring_t request, int code)
 {                               // Send an error response
    struct sockaddr_storage addr = *from;
@@ -315,9 +322,8 @@ sip_error (int sock, socklen_t addrlen, struct sockaddr_storage *from, cstring_t
    string_t p = sip_response (&addr, request, buf, 0, code);
    if (!p)
       return;
-   sip_content (&p, (void *) buf + sizeof (buf), NULL);
-   sendto (sock, buf, (p - buf), 0, (struct sockaddr *) &addr, addrlen);
-   ESP_LOGE (TAG, "Tx\n%.*s", (int) (p - buf), buf);
+   sip_content (&p, (void *) buf + sizeof (buf), 0);
+   sip_send (sock, buf, p, &addr, addrlen);
 }
 
 void
@@ -453,8 +459,12 @@ sip_task (void *arg)
    string_t regauth = NULL;
    uint16_t regcode = 0;
    esp_fill_random (&regcallid, sizeof (regcallid));
-   string_t callid=NULL;	// Current call id (incoming or outgoing)
-   uint64_t calltag=0;		// Current call tag
+   string_t invite = NULL;      // Incoming invite
+   string_t callid = NULL;
+   uint16_t callcode = 0;       // Call progress code
+   uint64_t calltag = 0;
+   struct sockaddr_storage calladdr;
+   socklen_t calladdrlen = 0;
    while (1)
    {
       sip_state_t status = sip.state;
@@ -478,6 +488,8 @@ sip_task (void *arg)
             ESP_LOGE (TAG, "Rx\n%.*s", len, buf);
             buf[len] = 0;
             cstring_t bufe = buf + len;
+            cstring_t cide,
+              cid = sip_find_header (buf, bufe, "Call-ID", "i", &cide, NULL);
             if (!strncmp (buf, "SIP/", 4))
             {                   // Response
                char *p = buf + 4;
@@ -592,26 +604,68 @@ sip_task (void *arg)
                   methode = buf;
                while (methode < bufe && isalpha ((int) *(unsigned char *) methode))
                   methode++;
-               if (methode - method == 3 && !strncasecmp (method, "ACK", 3))
+               // Is it for us
+               cstring_t ue,
+                 u = sip_find_header (buf, bufe, "To", "t", &ue, NULL);
+               u = sip_find_uri (u, ue, &ue);
+               u = sip_find_local (u, ue, &ue);
+               if (!u || strlen (revk_id) != (ue - u) || strncmp (revk_id, u, ue - u))
+                  sip_error (sock, addrlen, &addr, buf, 404);   // Not us
+               else if (methode - method == 3 && !strncasecmp (method, "ACK", 3))
                {                // ACK
-                  // TODO if expected it means we progress
+                  if (state == TASK_IC_PROGRESS)
+                  {
+                     if (callcode == 200)
+                     {
+                        state = TASK_IC;
+                        sip.giveup = now + 3600;
+                     } else
+                        state = TASK_IDLE;      // Call over
+                  }
                } else if (methode - method == 6 && !strncasecmp (method, "INVITE", 6))
                {                // INVITE
-                  // TODO
-                  sip_error (sock, addrlen, &addr, buf, 486);
+                  // Is this a call for us?
+                  // Are we in a state to accept the call?
+                  if (!cid ||   //
+                      (state == TASK_IC_PROGRESS && (!callid || strlen (callid) != cide - cid || strncmp (callid, cid, cide - cid))) || //
+                      (state && state != TASK_IC_PROGRESS))
+                     sip_error (sock, addrlen, &addr, buf, 486);        // Not in a state to take a call
+                  else
+                  {
+                     // Incoming call - is it for us?
+                     esp_fill_random (&calltag, sizeof (calltag));
+                     store (&callid, cid, cide);
+                     memcpy (&calladdr, &addr, calladdrlen = addrlen);
+                     store (&invite, buf, bufe);
+                     state = TASK_IC_PROGRESS;
+                     callcode = 100;
+                     sip.giveup = now + 300;
+                  }
                } else if (methode - method == 6 && !strncasecmp (method, "CANCEL", 6))
                {                // CANCEL
-                  // TODO
-                  sip_error (sock, addrlen, &addr, buf, 481);
+                  if (!cid ||   //
+                      (state == TASK_IC_PROGRESS && (!callid || strlen (callid) != cide - cid || strncmp (callid, cid, cide - cid))) || //
+                      (state && state != TASK_IC_PROGRESS))
+                     sip_error (sock, addrlen, &addr, buf, 481);
+                  else
+                  {             // Cancel
+                     sip_error (sock, addrlen, &addr, buf, 200);
+                     state = TASK_IC_PROGRESS;
+                     callcode = 487;
+                     sip.giveup = now + 10;
+                  }
                } else if (methode - method == 3 && !strncasecmp (method, "BYE", 3))
                {                // BYE
-                  // TODO
-                  sip_error (sock, addrlen, &addr, buf, 481);
+                  if (state == TASK_IC || state == TASK_OG)
+                  {
+                     state = TASK_IDLE;
+                     sip_error (sock, addrlen, &addr, buf, 200);
+                  } else
+                     sip_error (sock, addrlen, &addr, buf, 481);
                } else
                   sip_error (sock, addrlen, &addr, buf, 501);
             }
          }
-         continue;
       }
       // Do registration logic
       if (sip.regexpiry < now)
@@ -651,9 +705,8 @@ sip_task (void *arg)
                sip_add_headerf (&p, e, "Expires", "%d", SIP_EXPIRY);
                if (regauth)
                   sip_auth (buf, &p, e, regcode, regauth, sip.icuser, sip.icpass);
-               sip_content (&p, (void *) buf + sizeof (buf), NULL);
-               sendto (sock, buf, (p - buf), 0, (struct sockaddr *) &addr, addrlen);
-               ESP_LOGE (TAG, "Tx\n%.*s", (int) (p - buf), buf);
+               sip_content (&p, (void *) buf + sizeof (buf), 0);
+               sip_send (sock, buf, p, &addr, addrlen);
                regcode = 0;
                zap (&regauth);
             }
@@ -664,12 +717,26 @@ sip_task (void *arg)
          if (regbackoff < 300)
             regbackoff *= 2;
       }
-      // TODO giveup logic
-
+      if (sip.giveup && sip.giveup < now)
+         state = TASK_IDLE;     // Something went wrong
+      if (state == TASK_IC_PROGRESS && sip.hangup)
+      {
+         sip.hangup = 0;
+         sip.answer = 0;
+         callcode = 486;
+         sip.giveup = now + 10;
+      }
+      if (state == TASK_IC_PROGRESS && sip.answer)
+      {
+         sip.answer = 0;
+         callcode = 200;
+         sip.giveup = now + 10;
+      }
       // Do periodic
       switch (state)
       {
       case TASK_IDLE:          // Not in a call
+         sip.giveup = 0;
          status = SIP_IDLE;
          if (sip.call)
          {                      // Start outgoing call
@@ -689,15 +756,16 @@ sip_task (void *arg)
       case TASK_OG_BYE:        // We are sending BYEs, awaiting reply
          status = SIP_IDLE;
          break;
-      case TASK_IC_ALERT:      // We are sending 180
-         status = SIP_IC_ALERT;
-         break;
-      case TASK_IC_BUSY:       // We are sending 486, waiting ACK
-         status = SIP_IDLE;
-         break;
-      case TASK_IC_OK:         // We are sending 200, waiting ACK
-         status = SIP_IC;
-         break;
+      case TASK_IC_PROGRESS:   // We are sending 180
+         {
+            string_t e = sip_response (&calladdr, invite, buf, calltag, callcode);
+            sip_content (&e, (void *) buf + sizeof (buf), 1);
+            sip_send (sock, buf, e, &calladdr, calladdrlen);
+            if (callcode == 100)
+               callcode = 180;  // Move on to alerting
+            status = SIP_IC_ALERT;
+            break;
+         }
       case TASK_IC:            // We are in an incoming call
          status = SIP_IC;
          break;
