@@ -276,6 +276,49 @@ sip_content (char **const p, cstring_t e, cstring_t data)
    }
 }
 
+static string_t
+sip_response (struct sockaddr_storage *addr, cstring_t r, string_t b, uint64_t tag, int code)
+{                               // Make a response to request (r), fill in buffer (b), addr (addr should be sender initially), return end of response (or NULL)
+   cstring_t re = r + strlen (r);
+   cstring_t be = b + SIP_MAX;
+   cstring_t p,
+     e;
+   p = sip_find_header (r, re, "Via", "v", &e, NULL);
+   if (!p)
+      return NULL;
+   if (!sip_find_semi (p, e, "rport", NULL))
+   {                            // get address/port from Via
+      // TODO
+
+   }
+   b += sprintf (b, "SIP/2.0 %u Error %u\r\n", code, code);
+   void copy (cstring_t l, cstring_t s)
+   {
+      p = sip_find_header (r, re, l, s, &e, NULL);
+      if (p)
+         sip_add_headere (&b, be, l, p, e);
+   }
+   copy ("Via", "v");
+   copy ("CSeq", NULL);
+   copy ("Call-ID", "i");
+   copy ("From", "f");
+   copy ("To", "t");
+   // TODO add tag if no tag already
+   return b;
+}
+
+static void
+sip_error (int sock, socklen_t addrlen, struct sockaddr_storage *from, cstring_t request, int code)
+{                               // Send an error response
+   struct sockaddr_storage addr = *from;
+   char buf[SIP_MAX];
+   string_t p = sip_response (&addr, request, buf, 0, code);
+   if (!p)
+      return;
+   sip_content (&p, (void *) buf + sizeof (buf), NULL);
+   sendto (sock, buf, (p - buf), 0, (struct sockaddr *) &addr, addrlen);
+   ESP_LOGE (TAG, "Tx\n%.*s", (int) (p - buf), buf);
+}
 
 void
 sip_auth (string_t buf, string_t * pp, cstring_t e, uint16_t code, cstring_t auth, cstring_t user, cstring_t pass)
@@ -410,6 +453,8 @@ sip_task (void *arg)
    string_t regauth = NULL;
    uint16_t regcode = 0;
    esp_fill_random (&regcallid, sizeof (regcallid));
+   string_t callid=NULL;	// Current call id (incoming or outgoing)
+   uint64_t calltag=0;		// Current call tag
    while (1)
    {
       sip_state_t status = sip.state;
@@ -431,6 +476,7 @@ sip_task (void *arg)
          if (len > 10)
          {
             ESP_LOGE (TAG, "Rx\n%.*s", len, buf);
+            buf[len] = 0;
             cstring_t bufe = buf + len;
             if (!strncmp (buf, "SIP/", 4))
             {                   // Response
@@ -465,7 +511,10 @@ sip_task (void *arg)
                                                   NULL);
                               store (&regauth, auth, authe);
                               if (regauth)
+                              {
                                  regcode = code;
+                                 regretry = 0;
+                              }
                            } else if (code == 200)
                            {    // Registered
                               cstring_t p,
@@ -543,15 +592,23 @@ sip_task (void *arg)
                   methode = buf;
                while (methode < bufe && isalpha ((int) *(unsigned char *) methode))
                   methode++;
-               if (methode - method == 6 && !strncasecmp (method, "INVITE", 6))
+               if (methode - method == 3 && !strncasecmp (method, "ACK", 3))
+               {                // ACK
+                  // TODO if expected it means we progress
+               } else if (methode - method == 6 && !strncasecmp (method, "INVITE", 6))
                {                // INVITE
-
+                  // TODO
+                  sip_error (sock, addrlen, &addr, buf, 486);
                } else if (methode - method == 6 && !strncasecmp (method, "CANCEL", 6))
                {                // CANCEL
+                  // TODO
+                  sip_error (sock, addrlen, &addr, buf, 481);
                } else if (methode - method == 3 && !strncasecmp (method, "BYE", 3))
                {                // BYE
-
-               }
+                  // TODO
+                  sip_error (sock, addrlen, &addr, buf, 481);
+               } else
+                  sip_error (sock, addrlen, &addr, buf, 501);
             }
          }
          continue;
