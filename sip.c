@@ -157,10 +157,9 @@ typedef enum __attribute__((__packed__))
       TASK_OG_INVITE,           // We are sending INVITEs awaiting any response
       TASK_OG_WAIT,             // We have 1XX and waiting, we will send CANCELs if hangup set
       TASK_OG,                  // We are in an outgoing call
-      TASK_OG_BYE,              // We are sending BYEs, awaiting reply
       TASK_IC_PROGRESS,         // We are sending progress
       TASK_IC,                  // We are in an incoming call
-      TASK_IC_BYE,              // We are sendin BYEs, awaiting reply
+      TASK_BYE,                 // We are sendin BYEs, awaiting reply
 } sip_task_state_t;
 
 static struct
@@ -586,15 +585,33 @@ sip_task (void *arg)
                               sip.regexpiry = now + cexpires;
                            }
                         }
-                     } else if (methode - method == 6 && !strncasecmp (method, "INVITE", 6))
-                     {          // INVITE reply
-
-                     } else if (methode - method == 6 && !strncasecmp (method, "CANCEL", 6))
-                     {          // CANCEL reply
-
-                     } else if (methode - method == 3 && !strncasecmp (method, "BYE", 3))
-                     {          // CANCEL reply
-
+                     } else
+                     {
+                        if (callid && cid && strlen (callid) == (cide - cid) && !strncmp (callid, cid, cide - cid))
+                        {       // Call-ID matches
+                           if (methode - method == 6 && !strncasecmp (method, "INVITE", 6))
+                           {    // INVITE reply
+                              if (code == 200)
+                              { // Call answered
+                                 if (state == TASK_OG_WAIT)
+                                 {
+                                    state = TASK_OG;
+                                    sip.giveup = now + 3600;
+                                 }
+                              }
+                           } else if (methode - method == 6 && !strncasecmp (method, "CANCEL", 6))
+                           {    // CANCEL reply
+                              if (code == 200 && state == TASK_OG_WAIT)
+                              {
+                                 sip.hangup = 0;        // Stop sending CANCEL
+                                 sip.giveup = 10;
+                              }
+                           } else if (methode - method == 3 && !strncasecmp (method, "BYE", 3))
+                           {    // BYE reply
+                              if (code == 200 && (state == TASK_OG || state == TASK_IC))
+                                 state = TASK_IDLE;
+                           }
+                        }
                      }
                   }
                }
@@ -719,19 +736,6 @@ sip_task (void *arg)
       }
       if (sip.giveup && sip.giveup < now)
          state = TASK_IDLE;     // Something went wrong
-      if (state == TASK_IC_PROGRESS && sip.hangup)
-      {
-         sip.hangup = 0;
-         sip.answer = 0;
-         callcode = 486;
-         sip.giveup = now + 10;
-      }
-      if (state == TASK_IC_PROGRESS && sip.answer)
-      {
-         sip.answer = 0;
-         callcode = 200;
-         sip.giveup = now + 10;
-      }
       // Do periodic
       switch (state)
       {
@@ -751,13 +755,34 @@ sip_task (void *arg)
          status = SIP_OG_ALERT;
          break;
       case TASK_OG:            // We are in an outgoing call
+         if (sip.hangup)
+         {
+            sip.hangup = 0;
+            state = TASK_BYE;
+         }
          status = SIP_OG;
-         break;
-      case TASK_OG_BYE:        // We are sending BYEs, awaiting reply
-         status = SIP_IDLE;
          break;
       case TASK_IC_PROGRESS:   // We are sending 180
          {
+            if (sip.hangup)
+            {
+               sip.hangup = 0;
+               sip.answer = 0;
+               if (callcode < 200)
+               {
+                  sip.giveup = 10;
+                  callcode = 486;
+               }
+            }
+            if (sip.answer)
+            {
+               sip.answer = 0;
+               if (callcode < 200)
+               {
+                  sip.giveup = 10;
+                  callcode = 200;
+               }
+            }
             string_t e = sip_response (&calladdr, invite, buf, calltag, callcode);
             sip_content (&e, (void *) buf + sizeof (buf), 1);
             sip_send (sock, buf, e, &calladdr, calladdrlen);
@@ -767,9 +792,15 @@ sip_task (void *arg)
             break;
          }
       case TASK_IC:            // We are in an incoming call
+         if (sip.hangup)
+         {
+            sip.hangup = 0;
+            state = TASK_BYE;
+         }
          status = SIP_IC;
          break;
-      case TASK_IC_BYE:        // We are sendin BYEs, awaiting reply
+      case TASK_BYE:           // We are sending BYEs, awaiting reply
+         // TODO
          status = SIP_IDLE;
          break;
       }
