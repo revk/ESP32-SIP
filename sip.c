@@ -16,8 +16,10 @@ static const char __attribute__((unused)) * TAG = "SIP";
 #include "siptools.h"
 #include "mbedtls/md5.h"
 
+//#define       SIP_DEBUG
+
 #define	SIP_PORT	5060
-#define	SIP_RTP		8888
+#define	SIP_RTP		33333
 #define	SIP_MAX		1500
 #define	SIP_EXPIRY	3600
 
@@ -344,7 +346,9 @@ static void
 sip_send (int sock, cstring_t p, cstring_t e, struct sockaddr_storage *addr, socklen_t addrlen)
 {
    sendto (sock, p, (e - p), 0, (struct sockaddr *) addr, addrlen);
+#ifdef	SIP_DEBUG
    ESP_LOGE (TAG, "Tx\n%.*s", (int) (e - p), p);
+#endif
 }
 
 static void
@@ -616,7 +620,9 @@ sip_task (void *arg)
          len = recvfrom (sock, buf, sizeof (buf) - 1, 0, (struct sockaddr *) &addr, &addrlen);
          if (len > 10)
          {
+#ifdef	SIP_DEBUG
             ESP_LOGE (TAG, "Rx\n%.*s", len, buf);
+#endif
             buf[len] = 0;
             cstring_t bufe = buf + len;
             cstring_t cide,

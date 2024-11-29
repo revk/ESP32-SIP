@@ -519,7 +519,7 @@ static inline void
 add_e (string_t * pp, cstring_t e, char c)
 {
    static const char base16[] = "0123456789ABCDEF";
-   if (isalpha (c) || isdigit (c) || c == '_' || c == '-' || c == '*' || c == '.')
+   if (isalpha (c) || isdigit (c) || c == '_' || c == '-' || c == '*' || c == '.' || c == '+')
       add_c (pp, e, c);
    else
    {
