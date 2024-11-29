@@ -456,6 +456,103 @@ sip_hangup (void)
    return 0;
 }
 
+static socklen_t
+check_rtp (cstring_t invite, struct sockaddr_storage *addr)
+{
+   cstring_t p = invite;
+   while (*p && strncmp (p, "\r\n\r\n", 4))
+      p++;
+   if (!*p)
+      return 0;
+   p += 4;
+   uint16_t port = 0;
+   char pt = 0,
+      ip = 0;
+   cstring_t a = NULL,
+      ae = NULL;
+   while (*p)
+   {
+      char code = *p++;
+      if (*p == '=')
+      {
+         p++;
+         if (code == 'v')
+         {
+            if (atoi (p))
+               return 0;        // Not v0
+         }
+         if (code == 'c' && !strncasecmp (p, "IN", 2))
+         {
+            p += 2;
+            while (*p == ' ' || *p == 9)
+               p++;
+            if (!strncasecmp (p, "IP", 2))
+            {
+               p += 2;
+               if (*p)
+                  ip = *p++;
+               while (*p == ' ' || *p == 9)
+                  p++;
+               a = p;
+               while (*p && *p != '\r')
+                  p++;
+               ae = p;
+            }
+         } else if (code == 'm' && !strncasecmp (p, "audio", 5))
+         {
+            p += 5;
+            while (*p == ' ' || *p == 9)
+               p++;
+            port = atoi (p);
+            while (*p && *p != ' ' && *p != 9 && *p != '\r')
+               p++;
+            while (*p == ' ' || *p == 9)
+               p++;
+            if (!strncmp (p, "RTP/AVP", 7))
+            {
+               p += 7;
+               while (*p && *p != '\r')
+               {
+                  while (*p == ' ' || *p == 9)
+                     p++;
+                  if (atoi (p) == SIP_PT)
+                     pt = 1;
+                  while (*p && *p != ' ' && *p != 9 && *p != '\r')
+                     p++;
+               }
+            }
+         }
+      }
+      while (*p && *p != '\r')
+         p++;
+      if (*p)
+         p++;
+      if (*p == '\n')
+         p++;
+   }
+   if (!pt || !port || a == ae || (ip != '4' && ip != '6') || (ae - a) > 39)
+      return 0;
+   const struct addrinfo hint = {
+      .ai_family = (ip == '4' ? AF_INET : AF_INET6),
+      .ai_socktype = SOCK_DGRAM,
+      .ai_flags = AI_NUMERICSERV | AI_NUMERICHOST,
+   };
+   struct addrinfo *res = NULL;
+   memset (addr, 0, sizeof (*addr));
+   char ports[6];
+   sprintf (ports, "%d", port);
+   char name[40];
+   sprintf (name, "%.*s", (int) (ae - a), a);
+   socklen_t len=0;
+   if (!getaddrinfo (name, ports, &hint, &res) && res->ai_addrlen)
+   {
+      memcpy (addr, res->ai_addr, res->ai_addrlen);
+      len = res->ai_addrlen;
+   }
+   freeaddrinfo (res);
+   return len;
+}
+
 static void
 sip_task (void *arg)
 {
@@ -492,6 +589,8 @@ sip_task (void *arg)
    uint64_t calltag = 0;
    struct sockaddr_storage calladdr;
    socklen_t calladdrlen = 0;
+   struct sockaddr_storage rtpaddr;
+   socklen_t rtpaddrlen = 0;
    while (1)
    {
       sip_state_t status = sip.state;
@@ -664,6 +763,7 @@ sip_task (void *arg)
                      {
                         state = TASK_IC;
                         sip.giveup = now + 3600;
+                        // TODO can ACK update contact
                      } else
                         state = TASK_IDLE;      // Call over
                   }
@@ -685,6 +785,8 @@ sip_task (void *arg)
                      state = TASK_IC_PROGRESS;
                      callcode = 100;
                      sip.giveup = now + 300;
+                     if (!(rtpaddrlen = check_rtp (invite, &rtpaddr)))
+                        callcode = 406;
                   }
                } else if (methode - method == 6 && !strncasecmp (method, "CANCEL", 6))
                {                // CANCEL
@@ -782,6 +884,10 @@ sip_task (void *arg)
          status = SIP_IDLE;
          break;
       case TASK_OG_WAIT:       // We have 1XX and waiting, we will send CANCELs if hangup set
+         if (sip.hangup)
+         {                      // Send CANCEL
+
+         }
          status = SIP_OG_ALERT;
          break;
       case TASK_OG:            // We are in an outgoing call
@@ -832,7 +938,7 @@ sip_task (void *arg)
          status = SIP_IC;
          break;
       case TASK_BYE:           // We are sending BYEs, awaiting reply
-         // TODO
+         // TODO contact from INVITE if incoming...
          status = SIP_IDLE;
          break;
       }
