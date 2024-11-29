@@ -178,6 +178,12 @@ static struct
    char *ogpass;                // Outgoing call details
    uint32_t regexpiry;          // Registration expiry
    uint32_t giveup;             // Call handling expiry
+   struct sockaddr_storage rtpaddr;     // RTP
+   socklen_t rtpaddrlen;        // RTP
+   int rtp;                     // RTP socket
+   uint32_t ssrc;               // RTP ssrc
+   uint32_t ts;                 // RTP ts
+   uint16_t seq;                // RTP seq
    sip_state_t state;           // Status reported by sip_callback
    uint8_t call:1;              // Outgoing call required
    uint8_t answer:1;            // Answer required
@@ -459,6 +465,7 @@ sip_hangup (void)
 static socklen_t
 check_rtp (cstring_t invite, struct sockaddr_storage *addr)
 {
+   esp_fill_random (&sip.ssrc, sizeof (sip.ssrc));
    cstring_t p = invite;
    while (*p && strncmp (p, "\r\n\r\n", 4))
       p++;
@@ -543,7 +550,7 @@ check_rtp (cstring_t invite, struct sockaddr_storage *addr)
    sprintf (ports, "%d", port);
    char name[40];
    sprintf (name, "%.*s", (int) (ae - a), a);
-   socklen_t len=0;
+   socklen_t len = 0;
    if (!getaddrinfo (name, ports, &hint, &res) && res->ai_addrlen)
    {
       memcpy (addr, res->ai_addr, res->ai_addrlen);
@@ -589,8 +596,6 @@ sip_task (void *arg)
    uint64_t calltag = 0;
    struct sockaddr_storage calladdr;
    socklen_t calladdrlen = 0;
-   struct sockaddr_storage rtpaddr;
-   socklen_t rtpaddrlen = 0;
    while (1)
    {
       sip_state_t status = sip.state;
@@ -785,7 +790,7 @@ sip_task (void *arg)
                      state = TASK_IC_PROGRESS;
                      callcode = 100;
                      sip.giveup = now + 300;
-                     if (!(rtpaddrlen = check_rtp (invite, &rtpaddr)))
+                     if (!(sip.rtpaddrlen = check_rtp (invite, &sip.rtpaddr)))
                         callcode = 406;
                   }
                } else if (methode - method == 6 && !strncasecmp (method, "CANCEL", 6))
@@ -974,6 +979,7 @@ sip_audio_task (void *arg)
       vTaskDelete (NULL);
       return;
    }
+   sip.rtp = sock;
    while (1)
    {
       uint8_t buf[SIP_MAX];
@@ -1005,6 +1011,23 @@ sip_audio_task (void *arg)
 int
 sip_audio (uint8_t len, const uint8_t * data)
 {
-   // TODO
-   return 0;
+   if (!data || !len || !sip.state || !sip.rtpaddrlen || (len != 1 && len != SIP_BYTES))
+      return 0;
+   uint8_t buf[SIP_BYTES + 12];
+   buf[0] = 0x80;
+   buf[1] = (len == 1 ? 0x80 + 101 : SIP_PT);
+   buf[2] = (sip.seq >> 8);
+   buf[3] = sip.seq;
+   sip.seq++;
+   buf[4] = (sip.ts >> 24);
+   buf[5] = (sip.ts >> 16);
+   buf[6] = (sip.ts >> 8);
+   buf[7] = sip.ts;
+   sip.ts += SIP_BYTES;
+   buf[8] = (sip.ssrc >> 24);
+   buf[9] = (sip.ssrc >> 16);
+   buf[10] = (sip.ssrc >> 8);
+   buf[11] = sip.ssrc;
+   memcpy (buf + 12, data, len);
+   return sendto (sip.rtp, buf, len + 12, 0, (void *) &sip.rtpaddr, sip.rtpaddrlen);
 }
