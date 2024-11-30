@@ -827,7 +827,7 @@ sip_task (void *arg)
                      store (&invite, buf, bufe);
                      state = TASK_IC_PROGRESS;
                      callcode = 100;
-                     sip.giveup = now + 300;
+                     sip.giveup = now + 60;
                      if (!(sip.rtpaddrlen = check_rtp (invite, &sip.rtpaddr)))
                         callcode = 406;
                   }
