@@ -9,7 +9,6 @@
 
 #ifdef	SIP_ALAW
 #define SIP_CODING      "pcma"
-#define SIP_RATE        8000
 #define SIP_SILENCE     0x55
 #define SIP_PT  	8
 #endif
@@ -19,7 +18,7 @@
 #endif
 
 // A 16 bit quarter sine table (values 0-65535) at SIP_RATE
-extern const int16_t sip_sin4_8k[];
+extern const uint16_t sip_sin4_8k[];
 
 // A mapping of 7 bit RTP coding (alaw/ulaw) to 13 bit signed PCM 
 extern const int16_t sip_rtp_to_pcm13[];

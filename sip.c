@@ -19,7 +19,7 @@ static const char __attribute__((unused)) * TAG = "SIP";
 //#define       SIP_DEBUG
 
 #define	SIP_PORT	5060
-#define	SIP_RTP		33333
+#define	SIP_RTP		8888
 #define	SIP_MAX		1500
 #define	SIP_EXPIRY	3600
 

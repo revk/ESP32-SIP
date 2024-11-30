@@ -3,7 +3,7 @@
 #include <stdint.h>
 
 
-const int16_t sip_sin4_8k[] = { // quarter sine
+const uint16_t sip_sin4_8k[] = { // quarter sine
    0, 51, 102, 154, 205, 257, 308, 360,
    411, 463, 514, 566, 617, 669, 720, 772,
    823, 874, 926, 977, 1029, 1080, 1132, 1183,
