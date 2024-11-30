@@ -16,7 +16,7 @@ static const char __attribute__((unused)) * TAG = "SIP";
 #include "siptools.h"
 #include "mbedtls/md5.h"
 
-//#define       SIP_DEBUG
+#define       SIP_DEBUG
 
 #define	SIP_PORT	5060
 #define	SIP_RTP		8888
@@ -588,12 +588,10 @@ sip_task (void *arg)
    sip_task_state_t state = 0;
    uint32_t regretry = 0;       // Uptime for register retry
    uint32_t regbackoff = 0;
-   uint64_t regcallid = 0;
    uint64_t regtag = 0;
    uint8_t regseq = 0;
    string_t regauth = NULL;
    uint16_t regcode = 0;
-   esp_fill_random (&regcallid, sizeof (regcallid));
    string_t invite = NULL;      // Incoming invite
    string_t callid = NULL;
    uint16_t callcode = 0;       // Call progress code
@@ -859,7 +857,7 @@ sip_task (void *arg)
                sip_add_header_angle (&p, e, "From", local, locale, us, NULL);
                sip_add_header_angle (&p, e, "To", local, locale, sip.ichost, NULL);
                sip_add_header_angle (&p, e, "Contact", revk_id, NULL, us, NULL);
-               sip_add_headerf (&p, e, "Call-ID", "%llu@%s.%s", regcallid, revk_id, appname);
+               sip_add_headerf (&p, e, "Call-ID", "%s@%s.%s", revk_id, revk_id, appname);
                sip_add_headerf (&p, e, "Expires", "%d", SIP_EXPIRY);
                if (regauth)
                   sip_auth (buf, &p, e, regcode, regauth, sip.icuser, sip.icpass);
@@ -991,7 +989,7 @@ sip_audio_task (void *arg)
       uint8_t buf[SIP_MAX];
       struct sockaddr_storage source_addr;
       socklen_t socklen = sizeof (source_addr);
-      int len = recvfrom (sock, buf, sizeof (buf) - 1, 0, (struct sockaddr *) &source_addr, &socklen);
+      uint16_t len = recvfrom (sock, buf, sizeof (buf) - 1, 0, (struct sockaddr *) &source_addr, &socklen);
       if (len < 8 || !sip.callback || !sip.state)
          continue;
       uint16_t head = 12;
