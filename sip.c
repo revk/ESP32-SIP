@@ -268,7 +268,7 @@ sip_request (void *buf, struct sockaddr_storage *addr, socklen_t addrlen, uint8_
       *e = buf + SIP_MAX;
    sip_add_text (&p, e, method);
    sip_add_text (&p, e, " sip:");
-   sip_add_esc (&p, e, uri);
+   sip_add_text (&p, e, uri);
    sip_add_text (&p, e, " SIP/2.0\r\n");
    if (tag)
    {                            // Via
@@ -607,6 +607,8 @@ sip_task (void *arg)
    string_t invite = NULL;      // Incoming invite
    string_t callid = NULL;
    string_t callcontact = NULL;
+   string_t callnear = NULL;
+   string_t callfar = NULL;
    uint16_t callcode = 0;       // Call progress code
    uint64_t calltag = 0;
    struct sockaddr_storage calladdr;
@@ -742,6 +744,7 @@ sip_task (void *arg)
                            {    // INVITE reply
                               cstring_t e,
                                 p = sip_find_header (buf, bufe, "Contact", "m", &e, NULL);
+                              p = sip_find_uri (p, e, &e);
                               if (p)
                                  store (&callcontact, p, e);
                               if (code == 200)
@@ -761,13 +764,14 @@ sip_task (void *arg)
                               }
                            } else if (methode - method == 3 && !strncasecmp (method, "BYE", 3))
                            {    // BYE reply
-                              if (code == 200 && (state == TASK_OG || state == TASK_IC))
+                              if (code == 200 && state == TASK_BYE)
                                  state = TASK_IDLE;
                            }
                         }
                      }
                   }
                }
+               continue;
             } else
             {                   // Request
                cstring_t method = buf,
@@ -785,8 +789,13 @@ sip_task (void *arg)
                {                // ACK
                   cstring_t e,
                     p = sip_find_header (buf, bufe, "Contact", "m", &e, NULL);
+                  p = sip_find_uri (p, e, &e);
                   if (p)
                      store (&callcontact, p, e);
+                  p = sip_find_header (buf, bufe, "From", "f", &e, NULL);
+                  store (&callfar, p, e);
+                  p = sip_find_header (buf, bufe, "To", "t", &e, NULL);
+                  store (&callnear, p, e);
                   if (state == TASK_IC_PROGRESS)
                   {
                      if (callcode == 200)
@@ -809,6 +818,7 @@ sip_task (void *arg)
                      // Incoming call - is it for us?
                      cstring_t e,
                        p = sip_find_header (buf, bufe, "Contact", "m", &e, NULL);
+                     p = sip_find_uri (p, e, &e);
                      if (p)
                         store (&callcontact, p, e);
                      esp_fill_random (&calltag, sizeof (calltag));
@@ -914,11 +924,15 @@ sip_task (void *arg)
          zap (&invite);
          zap (&callid);
          zap (&callcontact);
+         zap (&callnear);
+         zap (&callfar);
          sip.giveup = 0;
          status = SIP_IDLE;
          if (sip.call)
          {                      // Start outgoing call
             // TODO store callcontact
+            // TODO store callnear
+            // TODO store callfar
             sip.call = 0;
          }
          break;
@@ -928,7 +942,13 @@ sip_task (void *arg)
       case TASK_OG_WAIT:       // We have 1XX and waiting, we will send CANCELs if hangup set
          if (sip.hangup)
          {                      // Send CANCEL
-
+            char *e = buf + SIP_MAX;
+            char *p = sip_request (buf, &calladdr, calladdrlen, 1, "CANCEL", callcontact, 0, regtag);
+            sip_add_header (&p, e, "From", callnear);
+            sip_add_header (&p, e, "To", callfar);
+            sip_add_header (&p, e, "Call-ID", callid);
+            sip_content (&p, e, NULL);
+            sip_send (sock, buf, p, &calladdr, calladdrlen);
          }
          status = SIP_OG_ALERT;
          break;
@@ -936,6 +956,7 @@ sip_task (void *arg)
          if (sip.hangup)
          {
             sip.hangup = 0;
+            sip.giveup = now + 10;
             state = TASK_BYE;
          }
          status = SIP_OG;
@@ -975,12 +996,22 @@ sip_task (void *arg)
          if (sip.hangup)
          {
             sip.hangup = 0;
+            sip.giveup = now + 10;
             state = TASK_BYE;
          }
          status = SIP_IC;
          break;
       case TASK_BYE:           // We are sending BYEs, awaiting reply
-         // TODO contact from INVITE if incoming...
+         if (callcontact && callnear && callfar)
+         {
+            char *e = buf + SIP_MAX;
+            char *p = sip_request (buf, &calladdr, calladdrlen, 1, "BYE", callcontact, 0, regtag);
+            sip_add_header (&p, e, "From", callnear);
+            sip_add_header (&p, e, "To", callfar);
+            sip_add_header (&p, e, "Call-ID", callid);
+            sip_content (&p, e, NULL);
+            sip_send (sock, buf, p, &calladdr, calladdrlen);
+         }
          status = SIP_IDLE;
          break;
       }
