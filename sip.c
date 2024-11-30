@@ -1,3 +1,4 @@
+// SIP client
 
 static const char __attribute__((unused)) * TAG = "SIP";
 
@@ -16,7 +17,7 @@ static const char __attribute__((unused)) * TAG = "SIP";
 #include "siptools.h"
 #include "mbedtls/md5.h"
 
-//#define       SIP_DEBUG
+#define       SIP_DEBUG
 
 #define	SIP_PORT	5060
 #define	SIP_RTP		8888
@@ -192,7 +193,7 @@ static struct
    uint8_t hangup:1;            // Hangup required
 } sip = { 0 };
 
-static int
+static socklen_t
 gethost (cstring_t name, uint16_t port, struct sockaddr_storage *addr)
 {
    int len = 0;
@@ -203,9 +204,32 @@ gethost (cstring_t name, uint16_t port, struct sockaddr_storage *addr)
    };
    struct addrinfo *res = NULL;
    memset (addr, 0, sizeof (*addr));
+   cstring_t namee = name;
+   if (*name == '[')
+   {
+      name++;
+      while (*namee && *namee != ']')
+         namee++;
+   } else
+      while (*namee && *namee != '.')
+      {
+         while (*namee == '-' || isalnum ((int) *(unsigned char *) namee))
+            namee++;
+         if (*namee != '.')
+            break;
+         namee++;
+      }
+   if (namee == name || namee > name + 128)
+      return 0;
+   char host[129];
+   sprintf (host, "%.*s", (int) (namee - name), name);
+   if (*namee == ']')
+      namee++;
+   if (*namee == ':')
+      port = atoi (namee + 1);
    char ports[6];
    sprintf (ports, "%d", port);
-   if (!getaddrinfo (name, ports, &hint, &res) && res->ai_addrlen)
+   if (!getaddrinfo (host, ports, &hint, &res) && res->ai_addrlen)
    {
       memcpy (addr, res->ai_addr, res->ai_addrlen);
       len = res->ai_addrlen;
@@ -312,17 +336,23 @@ sip_response (struct sockaddr_storage *addr, cstring_t r, string_t b, uint64_t t
    p = sip_find_header (r, re, "Via", "v", &e, NULL);
    if (!p)
       return NULL;
+   if (strncasecmp (p, "SIP/2.0/UDP", 11))
+      return NULL;
+   p += 11;
    if (!sip_find_semi (p, e, "rport", NULL))
-   {                            // get address/port from Via
-      // TODO
-
-   }
+      gethost (p, SIP_PORT, addr);
    b += sprintf (b, "SIP/2.0 %u Code %u\r\n", code, code);
    void copy (cstring_t l, cstring_t s)
-   {
-      p = sip_find_header (r, re, l, s, &e, NULL);
-      if (p)
-         sip_add_headere (&b, be, l, p, e);
+   {                            // copy headers
+      p = NULL;
+      while (1)
+      {
+         p = sip_find_header (r, re, l, s, &e, p);
+         if (p)
+            sip_add_headere (&b, be, l, p, e);
+         else
+            break;
+      }
    }
    copy ("Via", "v");
    copy ("CSeq", NULL);
@@ -543,25 +573,7 @@ check_rtp (cstring_t invite, struct sockaddr_storage *addr)
    }
    if (!pt || !port || a == ae || (ip != '4' && ip != '6') || (ae - a) > 39)
       return 0;
-   const struct addrinfo hint = {
-      .ai_family = (ip == '4' ? AF_INET : AF_INET6),
-      .ai_socktype = SOCK_DGRAM,
-      .ai_flags = AI_NUMERICSERV | AI_NUMERICHOST,
-   };
-   struct addrinfo *res = NULL;
-   memset (addr, 0, sizeof (*addr));
-   char ports[6];
-   sprintf (ports, "%d", port);
-   char name[40];
-   sprintf (name, "%.*s", (int) (ae - a), a);
-   socklen_t len = 0;
-   if (!getaddrinfo (name, ports, &hint, &res) && res->ai_addrlen)
-   {
-      memcpy (addr, res->ai_addr, res->ai_addrlen);
-      len = res->ai_addrlen;
-   }
-   freeaddrinfo (res);
-   return len;
+   return gethost (a, port, addr);
 }
 
 static void
@@ -594,6 +606,7 @@ sip_task (void *arg)
    uint16_t regcode = 0;
    string_t invite = NULL;      // Incoming invite
    string_t callid = NULL;
+   string_t callcontact = NULL;
    uint16_t callcode = 0;       // Call progress code
    uint64_t calltag = 0;
    struct sockaddr_storage calladdr;
@@ -727,6 +740,10 @@ sip_task (void *arg)
                         {       // Call-ID matches
                            if (methode - method == 6 && !strncasecmp (method, "INVITE", 6))
                            {    // INVITE reply
+                              cstring_t e,
+                                p = sip_find_header (buf, bufe, "Contact", "m", &e, NULL);
+                              if (p)
+                                 store (&callcontact, p, e);
                               if (code == 200)
                               { // Call answered
                                  if (state == TASK_OG_WAIT)
@@ -766,13 +783,16 @@ sip_task (void *arg)
                   sip_error (sock, addrlen, &addr, buf, 404);   // Not us
                else if (methode - method == 3 && !strncasecmp (method, "ACK", 3))
                {                // ACK
+                  cstring_t e,
+                    p = sip_find_header (buf, bufe, "Contact", "m", &e, NULL);
+                  if (p)
+                     store (&callcontact, p, e);
                   if (state == TASK_IC_PROGRESS)
                   {
                      if (callcode == 200)
                      {
                         state = TASK_IC;
                         sip.giveup = now + 3600;
-                        // TODO can ACK update contact
                      } else
                         state = TASK_IDLE;      // Call over
                   }
@@ -787,6 +807,10 @@ sip_task (void *arg)
                   else
                   {
                      // Incoming call - is it for us?
+                     cstring_t e,
+                       p = sip_find_header (buf, bufe, "Contact", "m", &e, NULL);
+                     if (p)
+                        store (&callcontact, p, e);
                      esp_fill_random (&calltag, sizeof (calltag));
                      store (&callid, cid, cide);
                      memcpy (&calladdr, &addr, calladdrlen = addrlen);
@@ -874,18 +898,27 @@ sip_task (void *arg)
             regbackoff *= 2;
       }
       if (sip.giveup && sip.giveup < now)
-         state = TASK_IDLE;     // Something went wrong
+      {
+         if (((state == TASK_IC_PROGRESS && callcode < 200) || state == TASK_IC || state == TASK_OG || state == TASK_OG_WAIT)
+             && !sip.hangup)
+         {
+            sip.hangup = 1;
+            sip.giveup = now + 10;
+         } else
+            state = TASK_IDLE;  // Something went wrong
+      }
       // Do periodic
       switch (state)
       {
       case TASK_IDLE:          // Not in a call
          zap (&invite);
          zap (&callid);
+         zap (&callcontact);
          sip.giveup = 0;
          status = SIP_IDLE;
          if (sip.call)
          {                      // Start outgoing call
-
+            // TODO store callcontact
             sip.call = 0;
          }
          break;
@@ -931,7 +964,7 @@ sip_task (void *arg)
             string_t e = sip_response (&calladdr, invite, buf, calltag, callcode);
             char us[42];
             ourip (us, calladdr.ss_family);
-            sip_content (&e, (void *) buf + sizeof (buf), us);
+            sip_content (&e, (void *) buf + sizeof (buf), callcode <= 200 ? us : NULL);
             sip_send (sock, buf, e, &calladdr, calladdrlen);
             if (callcode == 100)
                callcode = 180;  // Move on to alerting
