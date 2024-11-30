@@ -16,7 +16,7 @@ static const char __attribute__((unused)) * TAG = "SIP";
 #include "siptools.h"
 #include "mbedtls/md5.h"
 
-#define       SIP_DEBUG
+//#define       SIP_DEBUG
 
 #define	SIP_PORT	5060
 #define	SIP_RTP		8888
