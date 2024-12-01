@@ -510,7 +510,7 @@ sip_find_header (cstring_t p, cstring_t e, cstring_t head, cstring_t alt, cstrin
 static inline void
 add_c (string_t * pp, cstring_t e, char c)
 {
-   if ((*pp) >= e)
+   if ((*pp) + 1 >= e)
       return;
    *(*pp)++ = c;
 }
@@ -623,7 +623,7 @@ sip_add_extra (string_t * pp, cstring_t e, cstring_t tag, cstring_t start, cstri
       p--;
    if (p[-1] == '\r')
       p--;
-   if (p + strlen (tag ? : "") + 2 + (end - start) + 2 + 2 + (quote ? 2 : 0) > e)
+   if (p + strlen (tag ? : "") + 2 + (end - start) + 2 + 2 + (quote ? 2 : 0) + 1 >= e)
       return NULL;              // could not add header
    if (comma && p[-1] != ' ' && p[-1] != ':')
    {

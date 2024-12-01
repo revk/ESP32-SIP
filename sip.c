@@ -17,8 +17,6 @@ static const char __attribute__((unused)) * TAG = "SIP";
 #include "siptools.h"
 #include "mbedtls/md5.h"
 
-//#define       SIP_DEBUG
-
 #define	SIP_PORT	5060
 #define	SIP_RTP		8888
 #define	SIP_MAX		1500
@@ -170,6 +168,7 @@ static struct
    TaskHandle_t task;           // Task handle
    SemaphoreHandle_t mutex;     // Mutex for this structure
    sip_callback_t *callback;    // The registered callback functions
+   sip_debug_t *debug;          // The registered debug functions
    char *callid;                // Current call ID - we handle only one call at a time
    char *ichost;                // Registration details
    char *icuser;                // Registration details
@@ -289,7 +288,7 @@ sip_request (void *buf, struct sockaddr_storage *addr, socklen_t addrlen, uint8_
 
 static void
 sip_content (char **const p, cstring_t e, cstring_t us)
-{                               // Add remaining headers and content
+{                               // Add remaining headers and content, and ensures NULL
    char rtp[300];
    uint16_t l = 0;
    if (us)
@@ -319,11 +318,12 @@ sip_content (char **const p, cstring_t e, cstring_t us)
       sip_add_header (p, e, "Content-Type", "application/sdp");
    sip_add_headerf (p, e, "User-Agent", "%s-%s", appname, revk_version);
    sip_add_eol (p, e);
-   if (l && (*p) + l < e)
+   if (l && (*p) + l + 1 < e)
    {                            // Add RTP
       memcpy (*p, rtp, l);
       (*p) += l;
    }
+   *p = 0;
 }
 
 static string_t
@@ -374,11 +374,10 @@ sip_response (struct sockaddr_storage *addr, cstring_t r, string_t b, uint64_t t
 
 static void
 sip_send (int sock, cstring_t p, cstring_t e, struct sockaddr_storage *addr, socklen_t addrlen)
-{
+{                               // Expects null termination, set by sip_content
    sendto (sock, p, (e - p), 0, (struct sockaddr *) addr, addrlen);
-#ifdef	SIP_DEBUG
-   ESP_LOGE (TAG, "Tx\n%.*s", (int) (e - p), p);
-#endif
+   if (sip.debug)
+      sip.debug (0, addr, p);
 }
 
 static void
@@ -441,9 +440,10 @@ sip_auth (string_t buf, string_t * pp, cstring_t e, uint16_t code, cstring_t aut
 
 // Start sip_task, set up details for registration (can be null if no registration needed)
 void
-sip_register (cstring_t host, cstring_t user, cstring_t pass, sip_callback_t * callback)
+sip_register (cstring_t host, cstring_t user, cstring_t pass, sip_callback_t * callback, sip_debug_t * debug)
 {
    sip.callback = callback;
+   sip.debug = debug;
    if (!sip.task)
    {
       sip.mutex = xSemaphoreCreateBinary ();
@@ -633,10 +633,9 @@ sip_task (void *arg)
          len = recvfrom (sock, buf, sizeof (buf) - 1, 0, (struct sockaddr *) &addr, &addrlen);
          if (len > 10)
          {
-#ifdef	SIP_DEBUG
-            ESP_LOGE (TAG, "Rx\n%.*s", len, buf);
-#endif
             buf[len] = 0;
+            if (sip.debug)
+               sip.debug (1, &addr, buf);
             cstring_t bufe = buf + len;
             cstring_t cide,
               cid = sip_find_header (buf, bufe, "Call-ID", "i", &cide, NULL);
