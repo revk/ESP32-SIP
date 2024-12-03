@@ -677,8 +677,6 @@ sip_task (void *arg)
                      {          // REGISTER reply
                         if (seq == regseq)
                         {
-                           if (code <= 200)
-                              sip.rtpaddrlen = check_rtp (buf, &sip.rtpaddr);
                            if (code == 401 || code == 407)
                            {
                               cstring_t authe,
@@ -758,6 +756,8 @@ sip_task (void *arg)
                         {       // Call-ID matches
                            if (methode - method == 6 && !strncasecmp (method, "INVITE", 6))
                            {    // INVITE reply
+                              if (code <= 200)
+                                 sip.rtpaddrlen = check_rtp (buf, &sip.rtpaddr);
                               cstring_t e,
                                 p = sip_find_header (buf, bufe, "Contact", "m", &e, NULL);
                               if (p)
