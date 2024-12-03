@@ -261,7 +261,7 @@ sip_request (void *buf, struct sockaddr_storage *addr, socklen_t addrlen, uint8_
 {                               // make a SIP request
    if (!method || !uri || strlen (uri) > 256)
       return NULL;
-   if (!strncmp (uri, "sip:", 4))
+   if (!strncasecmp (uri, "sip:", 4))
       uri += 4;
    char *p = buf,
       *e = buf + SIP_MAX;
@@ -287,7 +287,7 @@ sip_request (void *buf, struct sockaddr_storage *addr, socklen_t addrlen, uint8_
 }
 
 static void
-sip_content (char **const p, cstring_t e, cstring_t us)
+sip_content (string_t * p, cstring_t e, cstring_t us)
 {                               // Add remaining headers and content, and ensures NULL
    char rtp[300];
    uint16_t l = 0;
@@ -323,7 +323,7 @@ sip_content (char **const p, cstring_t e, cstring_t us)
       memcpy (*p, rtp, l);
       (*p) += l;
    }
-   *p = 0;
+   *(*p) = 0;                      // Terminate
 }
 
 static string_t
@@ -448,7 +448,7 @@ sip_register (cstring_t host, cstring_t user, cstring_t pass, sip_callback_t * c
    {
       sip.mutex = xSemaphoreCreateBinary ();
       xSemaphoreGive (sip.mutex);
-      sip.task = make_task ("sip", sip_task, NULL, 10);
+      sip.task = make_task ("sip", sip_task, NULL, 16);
    }
    xSemaphoreTake (sip.mutex, portMAX_DELAY);
    if (store (&sip.ichost, host, NULL) + store (&sip.icuser, user, NULL) + store (&sip.icpass, pass, NULL))
@@ -828,6 +828,8 @@ sip_task (void *arg)
                      if (p)
                         store (&callcontact, p, e);
                      esp_fill_random (&calltag, sizeof (calltag));
+                     if (!calltag)
+                        calltag = 1;
                      store (&callid, cid, cide);
                      memcpy (&calladdr, &addr, calladdrlen = addrlen);
                      store (&invite, buf, bufe);
@@ -869,7 +871,7 @@ sip_task (void *arg)
       if (sip.regexpiry < now + 60 && sip.ichost && regretry < now)
       {
          cstring_t host = sip.ichost;
-         if (!strncmp (host, "sip:", 4))
+         if (!strncasecmp (host, "sip:", 4))
             host += 4;
          cstring_t local = host;
          cstring_t locale = strchr (local, '@');
@@ -901,7 +903,7 @@ sip_task (void *arg)
                sip_add_headerf (&p, e, "Expires", "%d", SIP_EXPIRY);
                if (regauth)
                   sip_auth (buf, &p, e, regcode, regauth, sip.icuser, sip.icpass);
-               sip_content (&p, (void *) buf + sizeof (buf), NULL);
+               sip_content (&p, e, NULL);
                sip_send (sock, buf, p, &addr, addrlen);
                regcode = 0;
                zap (&regauth);
@@ -935,14 +937,61 @@ sip_task (void *arg)
          sip.giveup = 0;
          status = SIP_IDLE;
          if (sip.call)
-         {                      // Start outgoing call
-            // TODO store callcontact
-            // TODO store callnear
-            // TODO store callfar
+         {
             sip.call = 0;
+            if (sip.oguri)
+            {
+               esp_fill_random (&calltag, sizeof (calltag));
+               if (!calltag)
+                  calltag = 1;
+               state = TASK_OG_INVITE;
+            }
          }
          break;
       case TASK_OG_INVITE:     // We are sending INVITEs awaiting any response
+         {
+            cstring_t local = sip.oguri,
+               locale = local + strlen (local);
+            if (!strncasecmp (local, "sip:", 4))
+               local += 4;
+            cstring_t host = strchr (local, '@');
+            if (host)
+               locale = host++;
+            else
+               host = sip.oghost;
+            if (!(addrlen = gethost (host, SIP_PORT, &addr)))
+            {
+               ESP_LOGE (TAG, "Failed to lookup %s", host);
+               state = TASK_IDLE;
+            } else
+            {
+               char us[42];
+               ourip (us, addr.ss_family);
+               char *contact;
+               asprintf (&contact, "%.*s@%s", (int) (locale - local), local, host);
+               string_t bufe = buf + SIP_MAX;
+               string_t p = sip_request (buf, &addr, addrlen, 1, "INVITE", contact, 0, calltag);
+               sip_add_header_angle (&p, bufe, "Contact", revk_id, NULL, us, NULL);
+               sip_add_header_angle (&p, bufe, "From", local, locale, us, NULL);
+               char t[21];
+               sprintf (t, "%llu", calltag);
+               sip_add_extra (&p, bufe, "tag", t, NULL, ';', 0, 0);
+               sip_add_header_angle (&p, bufe, "To", local, locale, host, NULL);
+               sip_content (&p, bufe, NULL);
+               sip_send (sock, buf, bufe = p, &calladdr, calladdrlen);
+               {
+                  cstring_t e,
+                    p = sip_find_header (buf, bufe, "Contact", "m", &e, NULL);
+                  p = sip_find_uri (p, e, &e);
+                  if (p)
+                     store (&callcontact, p, e);
+                  p = sip_find_header (buf, bufe, "From", "f", &e, NULL);
+                  store (&callnear, p, e);
+                  p = sip_find_header (buf, bufe, "To", "t", &e, NULL);
+                  store (&callfar, p, e);
+               }
+            }
+         }
          status = SIP_IDLE;
          break;
       case TASK_OG_WAIT:       // We have 1XX and waiting, we will send CANCELs if hangup set
