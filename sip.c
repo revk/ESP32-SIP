@@ -425,8 +425,8 @@ sip_auth (string_t buf, string_t * pp, cstring_t e, uint16_t code, cstring_t aut
    sip_add_comma_quote (pp, e, "uri", uri, euri);
    const char nc[] = "00000001";        // As we do not cache and reuse nonces the nc we send will always be 1 as first use of nonce
    char dig[33];
-   make_digest (dig, user, user + strlen (user), realm, erealm, pass, pass + strlen (pass),
-                method, methode, uri, euri, nonce, enonce, nc, nc + strlen (nc), cnonce, cnonce + strlen (cnonce), qop, eqop);
+   make_digest (dig, user, user + strlen (user), realm, erealm, pass, pass + strlen (pass), method, methode, uri, euri, nonce,
+                enonce, nc, nc + strlen (nc), cnonce, cnonce + strlen (cnonce), qop, eqop);
    sip_add_comma_quote (pp, e, "response", dig, dig + 32);
    x (algorithm);
    sip_add_comma_quote (pp, e, "cnonce", cnonce, NULL);
@@ -460,17 +460,20 @@ sip_register (cstring_t host, cstring_t user, cstring_t pass, sip_callback_t * c
 int
 sip_call (cstring_t cli, cstring_t uri, cstring_t proxy, cstring_t user, cstring_t pass)
 {
-   xSemaphoreTake (sip.mutex, portMAX_DELAY);
-   if (sip.state <= SIP_REGISTERED)
+   if (sip.mutex)
    {
-      store (&sip.ogcli, cli, NULL);
-      store (&sip.oghost, proxy, NULL);
-      store (&sip.oguri, uri, NULL);
-      store (&sip.oguser, user, NULL);
-      store (&sip.ogpass, pass, NULL);
-      sip.call = 1;
+      xSemaphoreTake (sip.mutex, portMAX_DELAY);
+      if (sip.state <= SIP_REGISTERED)
+      {
+         store (&sip.ogcli, cli, NULL);
+         store (&sip.oghost, proxy, NULL);
+         store (&sip.oguri, uri, NULL);
+         store (&sip.oguser, user, NULL);
+         store (&sip.ogpass, pass, NULL);
+         sip.call = 1;
+      }
+      xSemaphoreGive (sip.mutex);
    }
-   xSemaphoreGive (sip.mutex);
    return 0;
 }
 
@@ -478,10 +481,13 @@ sip_call (cstring_t cli, cstring_t uri, cstring_t proxy, cstring_t user, cstring
 int
 sip_answer (void)
 {
-   xSemaphoreTake (sip.mutex, portMAX_DELAY);
-   if (sip.state == SIP_IC_ALERT)
-      sip.answer = 1;
-   xSemaphoreGive (sip.mutex);
+   if (sip.mutex)
+   {
+      xSemaphoreTake (sip.mutex, portMAX_DELAY);
+      if (sip.state == SIP_IC_ALERT)
+         sip.answer = 1;
+      xSemaphoreGive (sip.mutex);
+   }
    return 0;
 }
 
@@ -489,10 +495,13 @@ sip_answer (void)
 int
 sip_hangup (void)
 {
-   xSemaphoreTake (sip.mutex, portMAX_DELAY);
-   if (sip.state > SIP_REGISTERED)
-      sip.hangup = 1;
-   xSemaphoreGive (sip.mutex);
+   if (sip.mutex)
+   {
+      xSemaphoreTake (sip.mutex, portMAX_DELAY);
+      if (sip.state > SIP_REGISTERED)
+         sip.hangup = 1;
+      xSemaphoreGive (sip.mutex);
+   }
    return 0;
 }
 
@@ -616,12 +625,10 @@ sip_task (void *arg)
    while (1)
    {
       sip_state_t status = sip.state;
-
       char buf[SIP_MAX];
       int len = 0;
       struct sockaddr_storage addr;
       socklen_t addrlen = 0;
-
       fd_set r;
       FD_ZERO (&r);
       FD_SET (sock, &r);
