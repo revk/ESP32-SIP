@@ -195,6 +195,8 @@ static struct
 static socklen_t
 gethost (cstring_t name, uint16_t port, struct sockaddr_storage *addr)
 {
+   if (!addr)
+      return 0;
    int len = 0;
    const struct addrinfo hint = {
       .ai_family = AF_UNSPEC,
@@ -203,6 +205,8 @@ gethost (cstring_t name, uint16_t port, struct sockaddr_storage *addr)
    };
    struct addrinfo *res = NULL;
    memset (addr, 0, sizeof (*addr));
+   if (!name)
+      return 0;
    cstring_t namee = name;
    if (*name == '[')
    {
@@ -323,7 +327,7 @@ sip_content (string_t * p, cstring_t e, cstring_t us)
       memcpy (*p, rtp, l);
       (*p) += l;
    }
-   *(*p) = 0;                      // Terminate
+   *(*p) = 0;                   // Terminate
 }
 
 static string_t
@@ -465,6 +469,7 @@ sip_call (cstring_t cli, cstring_t uri, cstring_t proxy, cstring_t user, cstring
       xSemaphoreTake (sip.mutex, portMAX_DELAY);
       if (sip.state <= SIP_REGISTERED)
       {
+         ESP_LOGE (TAG, "SIP call");
          store (&sip.ogcli, cli, NULL);
          store (&sip.oghost, proxy, NULL);
          store (&sip.oguri, uri, NULL);
@@ -614,6 +619,7 @@ sip_task (void *arg)
    string_t regauth = NULL;
    uint16_t regcode = 0;
    string_t invite = NULL;      // Incoming invite
+   string_t callauth = NULL;
    string_t callid = NULL;
    string_t callcontact = NULL;
    string_t callnear = NULL;
@@ -622,6 +628,7 @@ sip_task (void *arg)
    uint64_t calltag = 0;
    struct sockaddr_storage calladdr;
    socklen_t calladdrlen = 0;
+   uint8_t tick = 0;            // Low level retry logic
    while (1)
    {
       sip_state_t status = sip.state;
@@ -633,7 +640,7 @@ sip_task (void *arg)
       FD_ZERO (&r);
       FD_SET (sock, &r);
       uint32_t now = uptime ();
-      struct timeval t = { 1, 0 };      // Wait 1 second
+      struct timeval t = { 0, 100000ULL };      // One tick
       if (select (sock + 1, &r, NULL, NULL, &t) > 0)
       {                         // Get packet and process
          addrlen = sizeof (addr);
@@ -682,6 +689,7 @@ sip_task (void *arg)
                               {
                                  regcode = code;
                                  regretry = 0;
+                                 tick = 0;
                               }
                            } else if (code == 200)
                            {    // Registered
@@ -750,16 +758,44 @@ sip_task (void *arg)
                            {    // INVITE reply
                               cstring_t e,
                                 p = sip_find_header (buf, bufe, "Contact", "m", &e, NULL);
-                              p = sip_find_uri (p, e, &e);
                               if (p)
                                  store (&callcontact, p, e);
-                              if (code == 200)
-                              { // Call answered
-                                 if (state == TASK_OG_WAIT)
+                              p = sip_find_header (buf, bufe, "To", "t", &e, NULL);
+                              if (p)
+                                 store (&callfar, p, e);
+                              if (state == TASK_OG_INVITE)
+                              {
+                                 if (code == 401 || code == 407)
                                  {
+                                    cstring_t authe,
+                                     
+                                       auth =
+                                       sip_find_header (buf, bufe, code == 401 ? "WWW-Authenticate" : "Proxy-Authenticate", NULL,
+                                                        &authe,
+                                                        NULL);
+                                    if (auth)
+                                    {
+                                       store (&callauth, auth, authe);
+                                       callcode = code;
+                                       tick = 0;
+                                    }
+                                 } else if (code == 200)
+                                 {      // Call answered
                                     state = TASK_OG;
                                     sip.giveup = now + 3600;
-                                 }
+                                 } else if (code >= 300)
+                                    state = TASK_IDLE;
+                              }
+                              if (code >= 200)
+                              { // Send ACK (we could for non expected responses maybe)
+                                 char *e = buf + SIP_MAX;
+                                 char *p = sip_request (buf, &addr, addrlen, 1, "ACK", callcontact, 0, calltag);
+                                 sip_add_header (&p, e, "From", callnear);
+                                 sip_add_header (&p, e, "To", callfar);
+                                 sip_add_header (&p, e, "Call-ID", callid);
+                                 sip_add_header(&p, e, "Contact", callcontact);
+                                 sip_content (&p, e, NULL);
+                                 sip_send (sock, buf, p, &addr, addrlen);
                               }
                            } else if (methode - method == 6 && !strncasecmp (method, "CANCEL", 6))
                            {    // CANCEL reply
@@ -767,6 +803,7 @@ sip_task (void *arg)
                               {
                                  sip.hangup = 0;        // Stop sending CANCEL
                                  sip.giveup = 10;
+                                 tick = 0;
                               }
                            } else if (methode - method == 3 && !strncasecmp (method, "BYE", 3))
                            {    // BYE reply
@@ -795,7 +832,6 @@ sip_task (void *arg)
                {                // ACK
                   cstring_t e,
                     p = sip_find_header (buf, bufe, "Contact", "m", &e, NULL);
-                  p = sip_find_uri (p, e, &e);
                   if (p)
                      store (&callcontact, p, e);
                   p = sip_find_header (buf, bufe, "From", "f", &e, NULL);
@@ -820,11 +856,9 @@ sip_task (void *arg)
                       (state && state != TASK_IC_PROGRESS))
                      sip_error (sock, addrlen, &addr, buf, 486);        // Not in a state to take a call
                   else
-                  {
-                     // Incoming call - is it for us?
+                  { // Incoming call
                      cstring_t e,
                        p = sip_find_header (buf, bufe, "Contact", "m", &e, NULL);
-                     p = sip_find_uri (p, e, &e);
                      if (p)
                         store (&callcontact, p, e);
                      esp_fill_random (&calltag, sizeof (calltag));
@@ -865,6 +899,9 @@ sip_task (void *arg)
             }
          }
       }
+      if (state && tick--)
+         continue;
+      tick = 10;                // Low level retry
       // Do registration logic
       if (sip.regexpiry < now)
          sip.regexpiry = 0;     // Actually expired
@@ -929,11 +966,6 @@ sip_task (void *arg)
       switch (state)
       {
       case TASK_IDLE:          // Not in a call
-         zap (&invite);
-         zap (&callid);
-         zap (&callcontact);
-         zap (&callnear);
-         zap (&callfar);
          sip.giveup = 0;
          status = SIP_IDLE;
          if (sip.call)
@@ -945,6 +977,8 @@ sip_task (void *arg)
                if (!calltag)
                   calltag = 1;
                state = TASK_OG_INVITE;
+               sip.giveup = now + 10;
+               tick = 0;
             }
          }
          break;
@@ -959,25 +993,29 @@ sip_task (void *arg)
                locale = host++;
             else
                host = sip.oghost;
-            if (!(addrlen = gethost (host, SIP_PORT, &addr)))
+            if (!(calladdrlen = gethost (host, SIP_PORT, &calladdr)))
             {
                ESP_LOGE (TAG, "Failed to lookup %s", host);
                state = TASK_IDLE;
             } else
             {
                char us[42];
-               ourip (us, addr.ss_family);
+               ourip (us, calladdr.ss_family);
                char *contact;
                asprintf (&contact, "%.*s@%s", (int) (locale - local), local, host);
-               string_t bufe = buf + SIP_MAX;
-               string_t p = sip_request (buf, &addr, addrlen, 1, "INVITE", contact, 0, calltag);
+               cstring_t bufe = buf + SIP_MAX;
+               string_t p = sip_request (buf, &calladdr, calladdrlen, 1, "INVITE", contact, 0, calltag);
                sip_add_header_angle (&p, bufe, "Contact", revk_id, NULL, us, NULL);
-               sip_add_header_angle (&p, bufe, "From", local, locale, us, NULL);
+               sip_add_header_angle (&p, bufe, "From", sip.ogcli ? : "unknown", NULL, us, NULL);
                char t[21];
                sprintf (t, "%llu", calltag);
                sip_add_extra (&p, bufe, "tag", t, NULL, ';', 0, 0);
                sip_add_header_angle (&p, bufe, "To", local, locale, host, NULL);
-               sip_content (&p, bufe, NULL);
+               sip_add_headerf (&p, bufe, "Call-ID", "%llu@%s", calltag, us);
+               if (callauth)
+                  sip_auth (buf, &p, bufe, callcode, callauth, sip.icuser, sip.icpass);
+               sip_content (&p, bufe, us);
+               zap (&callauth);
                sip_send (sock, buf, bufe = p, &calladdr, calladdrlen);
                {
                   cstring_t e,
@@ -989,6 +1027,8 @@ sip_task (void *arg)
                   store (&callnear, p, e);
                   p = sip_find_header (buf, bufe, "To", "t", &e, NULL);
                   store (&callfar, p, e);
+                  p = sip_find_header (buf, bufe, "Call-ID", "i", &e, NULL);
+                  store (&callid, p, e);
                }
             }
          }
@@ -1060,10 +1100,11 @@ sip_task (void *arg)
          if (callcontact && callnear && callfar)
          {
             char *e = buf + SIP_MAX;
-            char *p = sip_request (buf, &calladdr, calladdrlen, 1, "BYE", callcontact, 0, regtag);
+            char *p = sip_request (buf, &calladdr, calladdrlen, 1, "BYE", callcontact, 0, calltag);
             sip_add_header (&p, e, "From", callnear);
             sip_add_header (&p, e, "To", callfar);
             sip_add_header (&p, e, "Call-ID", callid);
+            sip_add_header (&p, e, "Contact", callcontact);
             sip_content (&p, e, NULL);
             sip_send (sock, buf, p, &calladdr, calladdrlen);
          }
