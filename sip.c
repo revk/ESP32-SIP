@@ -677,6 +677,8 @@ sip_task (void *arg)
                      {          // REGISTER reply
                         if (seq == regseq)
                         {
+                           if (code <= 200)
+                              sip.rtpaddrlen = check_rtp (buf, &sip.rtpaddr);
                            if (code == 401 || code == 407)
                            {
                               cstring_t authe,
@@ -793,7 +795,7 @@ sip_task (void *arg)
                                  sip_add_header (&p, e, "From", callnear);
                                  sip_add_header (&p, e, "To", callfar);
                                  sip_add_header (&p, e, "Call-ID", callid);
-                                 sip_add_header(&p, e, "Contact", callcontact);
+                                 sip_add_header (&p, e, "Contact", callcontact);
                                  sip_content (&p, e, NULL);
                                  sip_send (sock, buf, p, &addr, addrlen);
                               }
@@ -856,7 +858,7 @@ sip_task (void *arg)
                       (state && state != TASK_IC_PROGRESS))
                      sip_error (sock, addrlen, &addr, buf, 486);        // Not in a state to take a call
                   else
-                  { // Incoming call
+                  {             // Incoming call
                      cstring_t e,
                        p = sip_find_header (buf, bufe, "Contact", "m", &e, NULL);
                      if (p)
