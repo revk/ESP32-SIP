@@ -795,13 +795,12 @@ sip_task (void *arg)
                                  sip_add_header (&p, e, "From", callnear);
                                  sip_add_header (&p, e, "To", callfar);
                                  sip_add_header (&p, e, "Call-ID", callid);
-                                 sip_add_header (&p, e, "Contact", callcontact);
                                  sip_content (&p, e, NULL);
                                  sip_send (sock, buf, p, &addr, addrlen);
                               }
                            } else if (methode - method == 6 && !strncasecmp (method, "CANCEL", 6))
                            {    // CANCEL reply
-                              if (code == 200 && state == TASK_OG_WAIT)
+                              if (code >= 200 && state == TASK_OG_WAIT)
                               {
                                  sip.hangup = 0;        // Stop sending CANCEL
                                  sip.giveup = 10;
@@ -809,7 +808,7 @@ sip_task (void *arg)
                               }
                            } else if (methode - method == 3 && !strncasecmp (method, "BYE", 3))
                            {    // BYE reply
-                              if (code == 200 && state == TASK_BYE)
+                              if (code >= 200 && state == TASK_BYE)
                                  state = TASK_IDLE;
                            }
                         }
