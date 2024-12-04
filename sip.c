@@ -885,7 +885,7 @@ sip_task (void *arg)
                      sip_error (sock, addrlen, &addr, buf, 200);
                      state = TASK_IC_PROGRESS;
                      callcode = 487;
-                     sip.giveup = now + 10;
+                     sip.giveup = now + 2;
                   }
                } else if (methode - method == 3 && !strncasecmp (method, "BYE", 3))
                {                // BYE
