@@ -306,7 +306,7 @@ sip_content (string_t * p, cstring_t e, cstring_t us)
          ip = "6";
       }
       l = sprintf (rtp, "v=0\r\n"       //
-                   "o=- %u 0 IN IP%s %.*s\r\n"   //
+                   "o=- %u 0 IN IP%s %.*s\r\n"  //
                    "s=call\r\n" //
                    "c=IN IP%s %.*s\r\n" //
                    "t=0 0\r\n"  //
@@ -873,6 +873,7 @@ sip_task (void *arg)
                      sip.giveup = now + 60;
                      if (!(sip.rtpaddrlen = check_rtp (invite, &sip.rtpaddr)))
                         callcode = 406;
+                     tick = 0;
                   }
                } else if (methode - method == 6 && !strncasecmp (method, "CANCEL", 6))
                {                // CANCEL
@@ -886,6 +887,7 @@ sip_task (void *arg)
                      state = TASK_IC_PROGRESS;
                      callcode = 487;
                      sip.giveup = now + 2;
+                     tick = 0;
                   }
                } else if (methode - method == 3 && !strncasecmp (method, "BYE", 3))
                {                // BYE
