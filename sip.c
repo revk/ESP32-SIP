@@ -306,7 +306,7 @@ sip_content (string_t * p, cstring_t e, cstring_t us)
          ip = "6";
       }
       l = sprintf (rtp, "v=0\r\n"       //
-                   "o- %u 0 IN IP%s %.*s\r\n"   //
+                   "o=- %u 0 IN IP%s %.*s\r\n"   //
                    "s=call\r\n" //
                    "c=IN IP%s %.*s\r\n" //
                    "t=0 0\r\n"  //
