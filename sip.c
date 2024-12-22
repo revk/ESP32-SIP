@@ -2,6 +2,10 @@
 
 static const char __attribute__((unused)) * TAG = "SIP";
 
+// TODO
+// A de-register for shutdown
+// maybe a hash in the target for creds so old registrations don't work
+
 #include <stdint.h>
 #include <unistd.h>
 #include <string.h>
