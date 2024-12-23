@@ -860,6 +860,8 @@ sip_task (void *arg)
                       (state == TASK_IC_PROGRESS && (!callid || strlen (callid) != cide - cid || strncmp (callid, cid, cide - cid))) || //
                       (state && state != TASK_IC_PROGRESS))
                      sip_error (sock, addrlen, &addr, buf, 486);        // Not in a state to take a call
+                  else if (!(sip.rtpaddrlen = check_rtp (buf, &sip.rtpaddr)))
+                     sip_error (sock, addrlen, &addr, buf, 406);
                   else
                   {             // Incoming call
                      cstring_t e,
@@ -875,8 +877,6 @@ sip_task (void *arg)
                      state = TASK_IC_PROGRESS;
                      callcode = 100;
                      sip.giveup = now + 60;
-                     if (!(sip.rtpaddrlen = check_rtp (invite, &sip.rtpaddr)))
-                        callcode = 406;
                      tick = 0;
                   }
                } else if (methode - method == 6 && !strncasecmp (method, "CANCEL", 6))
