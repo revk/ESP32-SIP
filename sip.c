@@ -764,7 +764,7 @@ sip_task (void *arg)
                               else
                               {
                                  sip.regexpiry = 0;
-                                 regretry = now + SIP_EXPIRES;
+                                 regretry = now + SIP_EXPIRY;
                               }
                            }
                         }
