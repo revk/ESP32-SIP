@@ -183,6 +183,8 @@ static struct
    char *oguri;                 // Outgoing call details
    char *oguser;                // Outgoing call details
    char *ogpass;                // Outgoing call details
+   uint16_t regcode = 0;        // Register code
+   string_t regauth;            // Register auth
    uint64_t regtag;             // Registration tag
    uint32_t regexpiry;          // Registration expiry
    uint32_t giveup;             // Call handling expiry
@@ -481,6 +483,7 @@ sip_send_reg (uint32_t expiry)
    if (!sip.regtag)
       sip.regtag = 1;
    sip.regseq++;
+   char buf[SIP_MAX];
    char *e = buf + SIP_MAX;
    char *p = sip_request (buf, &addr, addrlen, sip.regseq, "REGISTER", sip.ichost, 0, sip.regtag);
    if (p)
@@ -492,12 +495,12 @@ sip_send_reg (uint32_t expiry)
       sip_add_header_angle (&p, e, "Contact", revk_id, NULL, us, NULL);
       sip_add_headerf (&p, e, "Call-ID", "%s@%s.%s", revk_id, revk_id, appname);
       sip_add_headerf (&p, e, "Expires", "%d", expiry);
-      if (regauth)
-         sip_auth (buf, &p, e, regcode, regauth, sip.icuser, sip.icpass);
+      if (sip.regauth)
+         sip_auth (buf, &p, e, sip.regcode, sip.regauth, sip.icuser, sip.icpass);
       sip_content (&p, e, NULL);
       sip_send (buf, p, &addr, addrlen);
-      regcode = 0;
-      zap (&regauth);
+      sip.regcode = 0;
+      zap (&sip.regauth);
    }
 }
 
@@ -675,8 +678,6 @@ sip_task (void *arg)
    sip_task_state_t state = 0;
    uint32_t regretry = 0;       // Uptime for register retry
    uint32_t regbackoff = 0;
-   string_t regauth = NULL;
-   uint16_t regcode = 0;
    string_t invite = NULL;      // Incoming invite
    string_t callauth = NULL;
    string_t callid = NULL;
@@ -743,10 +744,10 @@ sip_task (void *arg)
                                  auth =
                                  sip_find_header (buf, bufe, code == 401 ? "WWW-Authenticate" : "Proxy-Authenticate", NULL, &authe,
                                                   NULL);
-                              store (&regauth, auth, authe);
-                              if (regauth)
+                              store (&sip.regauth, auth, authe);
+                              if (sip.regauth)
                               {
-                                 regcode = code;
+                                 sip.regcode = code;
                                  regretry = 0;
                                  tick = 0;
                               }
@@ -806,7 +807,7 @@ sip_task (void *arg)
 
                               if (maxexp)
                                  cexpires = maxexp;
-                              if (xexpires)
+                              if (cexpires)
                                  sip.regexpiry = now + cexpires;
                               else
                               {
