@@ -55,6 +55,7 @@ int sip_audio (uint8_t len, const uint8_t * data);
 
 // Start sip_task, set up details for registration (can be null if no registration needed)
 void sip_register (const char *host, const char *user, const char *pass, sip_callback_t * callback, sip_debug_t * debug);
+void sip_dereg(void);	// No longer register
 
 // Set up an outgoing call, proxy optional (taken from uri)
 int sip_call (const char *cli, const char *uri, const char *proxy, const char *user, const char *pass);
