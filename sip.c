@@ -466,7 +466,7 @@ sip_register (cstring_t host, cstring_t user, cstring_t pass, sip_callback_t * c
 }
 
 void
-sip_deregister (void)
+sip_dereg(void)
 {
    sip.dereg = 1;
    sip.regexpiry = 0;           // Deregister
