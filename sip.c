@@ -1080,7 +1080,7 @@ sip_task (void *arg)
          }
          status = SIP_OG;
          break;
-      case TASK_IC_PROGRESS:   // We are sending 180
+      case TASK_IC_PROGRESS:   // We are sending 80
          {
             if (sip.hangup)
             {
@@ -1107,7 +1107,10 @@ sip_task (void *arg)
             sip_content (&e, (void *) buf + sizeof (buf), callcode <= 200 ? us : NULL);
             sip_send (sock, buf, e, &calladdr, calladdrlen);
             if (callcode == 100)
+            {
                callcode = 180;  // Move on to alerting
+               tick = 0;
+            }
             status = SIP_IC_ALERT;
             break;
          }
