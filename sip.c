@@ -183,7 +183,7 @@ static struct
    char *oguri;                 // Outgoing call details
    char *oguser;                // Outgoing call details
    char *ogpass;                // Outgoing call details
-   uint16_t regcode = 0;        // Register code
+   uint16_t regcode;            // Register code
    string_t regauth;            // Register auth
    uint64_t regtag;             // Registration tag
    uint32_t regexpiry;          // Registration expiry
