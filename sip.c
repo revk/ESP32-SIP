@@ -894,6 +894,7 @@ sip_task (void *arg)
                      sip.giveup = now + 60;
                      if (!(sip.rtpaddrlen = check_rtp (invite, &sip.rtpaddr)))
                         callcode = 406;
+                     tick = 0;
                   }
                } else if (methode - method == 6 && !strncasecmp (method, "CANCEL", 6))
                {                // CANCEL
@@ -907,6 +908,7 @@ sip_task (void *arg)
                      state = TASK_IC_PROGRESS;
                      callcode = 487;
                      sip.giveup = now + 2;
+                     tick = 0;
                   }
                } else if (methode - method == 3 && !strncasecmp (method, "BYE", 3))
                {                // BYE
