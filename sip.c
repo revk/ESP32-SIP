@@ -466,10 +466,13 @@ sip_register (cstring_t host, cstring_t user, cstring_t pass, sip_callback_t * c
 }
 
 void
-sip_dereg(void)
+sip_dereg (void)
 {
-   sip.dereg = 1;
-   sip.regexpiry = 0;           // Deregister
+   if (!sip.dereg)
+   {
+      sip.dereg = 1;
+      sip.regexpiry = 0;        // Deregister
+   }
 }
 
 // Set up an outgoing call, proxy optional (taken from uri)
