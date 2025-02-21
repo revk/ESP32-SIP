@@ -703,7 +703,7 @@ sip_task (void *arg)
                               if (regauth)
                               {
                                  regcode = code;
-                                 regretry = 0;
+                                 regretry = 0;  // Try no, as we have auth details
                                  tick = 0;
                               }
                            } else if (code == 200)
@@ -763,8 +763,13 @@ sip_task (void *arg)
                               if (maxexp)
                                  cexpires = maxexp;
                               if (cexpires)
+                              {
                                  sip.regexpiry = now + cexpires;
-                              else
+                                 if (cexpires < 120)
+                                    regretry = now + cexpires / 2;
+                                 else
+                                    regretry = now + cexpires - 60;
+                              } else
                               {
                                  sip.regexpiry = 0;
                                  regretry = now + SIP_EXPIRY;
@@ -929,7 +934,7 @@ sip_task (void *arg)
       // Do registration logic
       if (sip.regexpiry < now)
          sip.regexpiry = 0;     // Actually expired
-      if (sip.regexpiry < now + 60 && sip.ichost && regretry < now)
+      if (sip.ichost && regretry < now)
       {
          cstring_t host = sip.ichost;
          if (!strncasecmp (host, "sip:", 4))
