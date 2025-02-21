@@ -929,7 +929,7 @@ sip_task (void *arg)
       // Do registration logic
       if (sip.regexpiry < now)
          sip.regexpiry = 0;     // Actually expired
-      if (sip.regexpiry < now + 60 && sip.ichost && regretry < now)
+      if (sip.regexpiry < now + (cexpires / 2) && sip.ichost && regretry < now)
       {
          cstring_t host = sip.ichost;
          if (!strncasecmp (host, "sip:", 4))
