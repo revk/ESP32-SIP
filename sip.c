@@ -852,11 +852,8 @@ sip_task (void *arg)
                // Is it for us
                cstring_t ue,
                  u = sip_find_request (buf, bufe, &ue);
-	       if(u)ESP_LOGE(TAG,"Request [%.*s]",(int)(ue-u),u);
                u = sip_find_uri (u, ue, &ue);
-	       if(u)ESP_LOGE(TAG,"Request URI [%.*s]",(int)(ue-u),u);
                u = sip_find_local (u, ue, &ue);
-	       if(u)ESP_LOGE(TAG,"Request Local [%.*s]",(int)(ue-u),u);
                if (!u || strlen (revk_id) != (ue - u) || strncmp (revk_id, u, ue - u))
                   sip_error (sock, addrlen, &addr, buf, 404);   // Not us
                else if (methode - method == 3 && !strncasecmp (method, "ACK", 3))
