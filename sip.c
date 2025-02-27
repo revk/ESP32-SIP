@@ -786,6 +786,7 @@ sip_task (void *arg)
                                  sip.rtpaddrlen = check_rtp (buf, &sip.rtpaddr);
                               cstring_t e,
                                 p = sip_find_header (buf, bufe, "Contact", "m", &e, NULL);
+                              p = sip_find_uri (p, e, &e);
                               if (p)
                                  store (&callcontact, p, e);
                               p = sip_find_header (buf, bufe, "To", "t", &e, NULL);
@@ -850,7 +851,7 @@ sip_task (void *arg)
                   methode++;
                // Is it for us
                cstring_t ue,
-                 u = sip_find_header (buf, bufe, "To", "t", &ue, NULL);
+                 u = sip_find_request (buf, bufe, NULL);
                u = sip_find_uri (u, ue, &ue);
                u = sip_find_local (u, ue, &ue);
                if (!u || strlen (revk_id) != (ue - u) || strncmp (revk_id, u, ue - u))
@@ -859,6 +860,7 @@ sip_task (void *arg)
                {                // ACK
                   cstring_t e,
                     p = sip_find_header (buf, bufe, "Contact", "m", &e, NULL);
+                  p = sip_find_uri (p, e, &e);
                   if (p)
                      store (&callcontact, p, e);
                   p = sip_find_header (buf, bufe, "From", "f", &e, NULL);
@@ -886,6 +888,7 @@ sip_task (void *arg)
                   {             // Incoming call
                      cstring_t e,
                        p = sip_find_header (buf, bufe, "Contact", "m", &e, NULL);
+                     p = sip_find_uri (p, e, &e);
                      if (p)
                         store (&callcontact, p, e);
                      esp_fill_random (&calltag, sizeof (calltag));
